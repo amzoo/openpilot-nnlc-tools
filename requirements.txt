@@ -1,0 +1,9 @@
+numpy>=1.24,<2.0
+pandas>=2.0,<3.0
+matplotlib>=3.7,<4.0
+tqdm>=4.65
+zstandard>=0.21
+paramiko>=3.0
+
+# pycapnp and cereal are provided by the openpilot environment.
+# Set PYTHONPATH=/path/to/openpilot before running tools that read rlogs.
