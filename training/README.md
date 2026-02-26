@@ -65,13 +65,17 @@ Pkg.add("Metal")
 
 ## Known Issues
 
-### CPU Training Gives Up Early
+### CPU Training
 
-Training on CPU often terminates prematurely — the optimizer gets stuck in a flat region and the early stopping kicks in. This is a known issue with the AdaGrad optimizer on CPU.
+CPU training works reliably with the CustomAdaGrad optimizer (~8 seconds for 1000 epochs on small datasets). Use `--cpu` to force CPU mode:
 
-**Workarounds:**
-- Use NVIDIA GPU with CUDA (recommended, works reliably)
-- Use Apple Silicon with Metal (partially supported via `latmodel_temporal.jl`)
+```bash
+bash training/run.sh /path/to/latmodels/ --cpu
+```
+
+GPU is still recommended for large datasets:
+- **NVIDIA GPU with CUDA** — fastest and most reliable
+- **Apple Silicon with Metal** — supported via `latmodel_temporal.jl`
 - M1 Pro with 16GB RAM is insufficient for larger datasets — consider M2 Pro/Max or better
 
 ### Docker
@@ -88,9 +92,15 @@ AMD GPU support via ROCm is not yet working with Julia's Flux. This is an open a
 # 1. Extract training data with temporal features
 python -m nnlc_tools.extract_lateral_data /path/to/rlogs/ -o /path/to/latmodels/my_car.csv --temporal
 
-# 2. Run training
+# 2. Run training (recommended — handles juliaup PATH automatically)
+bash training/run.sh /path/to/latmodels/
+
+# Or run Julia directly
 cd training/
 julia latmodel_temporal.jl /path/to/latmodels/
+
+# Force CPU mode (no GPU required)
+bash training/run.sh /path/to/latmodels/ --cpu
 
 # 3. Deploy model
 cp /path/to/latmodels/my_car_model.json \

@@ -94,16 +94,30 @@ This generates a 3-panel plot:
 - **Lateral accel distribution** — shows balance of left/right turning data
 - **Override rate by speed** — shows where the driver is fighting the controller
 
-### 5. Train model
+### 5. Assess coverage and iterate
+
+Review the coverage chart from step 4. If you see red bins (gaps with <50 samples), collect more driving data targeting those conditions before training. Common gaps:
+- Low-speed tight turns (city driving)
+- High-speed gentle curves (highway)
+- One turning direction over the other
+
+### 6. Train model
 
 See [training/README.md](training/README.md) for Julia setup and training instructions.
 
 ```bash
+# Recommended — handles juliaup PATH automatically
+bash training/run.sh /path/to/latmodels/
+
+# Or run Julia directly
 cd training/
 julia latmodel_temporal.jl /path/to/latmodels/
+
+# Force CPU mode (no GPU required, slower for large datasets)
+bash training/run.sh /path/to/latmodels/ --cpu
 ```
 
-### 6. Deploy model
+### 7. Deploy model
 
 Copy the output JSON to your openpilot install:
 
@@ -117,15 +131,17 @@ The filename should match your car's fingerprint. See `sunnypilot/selfdrive/cont
 
 Good training data is diverse and clean. Aim for:
 
+- **Disable NNLC while collecting**: Use the stock torque controller during data collection so the torque signal reflects the base controller, not a previous model
+- **Disable "lateral on blinker"**: Turn off any blinker-based lateral override settings to avoid noisy data during lane changes
 - **Varied speeds**: City streets (5-15 m/s), suburban (15-25 m/s), highway (25-35 m/s)
 - **Varied turns**: Gentle curves, tight turns, S-curves, on-ramps/off-ramps
 - **Minimal overrides**: Let the controller drive — interventions corrupt the torque signal
 - **Both directions**: Left and right turns in equal measure
 - **Different road grades**: Flat, uphill, downhill — affects roll compensation
-- **Multiple routes**: Don't just drive the same loop repeatedly
+- **Multiple routes**: Don't just drive the same loop repeatedly — aim for 20-30 clean routes across different road types
 - **Dry roads**: Wet/icy roads change tire grip and produce non-representative data
 
-**How much data?** Start with 5-10 hours of clean driving. Check coverage gaps with `visualize_coverage` and fill them with targeted drives.
+**How much data?** Start with 5-10 hours of clean driving across 20-30 routes. Check coverage gaps with `visualize_coverage` and fill them with targeted drives.
 
 **What to avoid:**
 - Heavy traffic (lots of standstill/stop-and-go)
@@ -213,9 +229,15 @@ Check that your rlogs are in the expected directory structure:
     ...
 ```
 
-### Julia training stops early on CPU
+### Julia training on CPU
 
-This is a known issue. Use a CUDA-capable NVIDIA GPU or Apple Silicon with Metal. See [training/README.md](training/README.md).
+CPU training works — expect ~8 seconds for 1000 epochs on small datasets. Use `--cpu` to force CPU mode:
+
+```bash
+bash training/run.sh /path/to/latmodels/ --cpu
+```
+
+GPU (CUDA or Metal) is still recommended for large datasets due to speed. See [training/README.md](training/README.md).
 
 ## Source Attribution
 
