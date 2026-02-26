@@ -289,6 +289,8 @@ This project builds on work from:
 - [mmmorks/sunnypilot](https://github.com/mmmorks/sunnypilot) (`staging-merged` @ `8a9f0311`) — Python rlog processing tools
 - [ryanomatic/rlog_aggregation](https://github.com/ryanomatic/rlog_aggregation) (`main` @ `26b1ea05`) — Rlog download tool
 - [mmmorks/OP_ML_FF](https://github.com/mmmorks/OP_ML_FF) (`master` @ `0116b9e3`, forked from [twilsonco/OP_ML_FF](https://github.com/twilsonco/OP_ML_FF)) — Julia training scripts
+- warren.2 — Testing, debugging, and pipeline feedback that shaped the tool design
+- night_raider_ — Original SP-NNLC Docker container for NVIDIA
 
 ## Roadmap
 
@@ -305,8 +307,9 @@ Derived from community feedback from the Sunnypilot tuning-nnlc Discord channel.
 - [x] **Driving guidance** — Documented in README (data collection tips, what to avoid)
 - [x] **End-to-end guide** — README covers full pipeline: sync → extract → score → visualize → train → deploy
 - [x] **Troubleshooting** — Common issues documented (OOM, rsync, rlogs, CPU training)
+- [ ] **Docker GPU training** — Test NVIDIA GPU passthrough for Julia training in Docker
 - [ ] **AMD GPU support** — Port training to support ROCm (community member with 7900 XT available to test)
 - [ ] **Docker AMD GPU** — Add AMD GPU passthrough to Docker setup
 - [ ] **Honda/Acura EPS filtering** — Review and integrate `Micim987/opendbc` signal filtering
 - [ ] **HKG and Mazda compatibility** — Investigate rlog parsing failures for Hyundai/Kia/Genesis and Mazda
-- [ ] **Forum documentation** — Publish guide to Sunnypilot forum per maintainer request
+- [x] **Forum documentation** — Published guide to Sunnypilot forum
