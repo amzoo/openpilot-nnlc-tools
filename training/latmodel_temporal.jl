@@ -22,7 +22,7 @@
 #     "SplitApplyCombine",
 #     "InvertedIndices",
 #     "JSON",
-#     "Feather",
+#     # "Feather",  # No longer needed, using CSV
 #     "Dates",
 #     "Metal",
 #     "CUDA",
@@ -61,14 +61,13 @@ using SharedArrays
 using SplitApplyCombine
 using InvertedIndices
 using JSON
-using Feather
+
 using Dates
-using Metal
-using CUDA
-using CUDA: CuIterator
+try using Metal catch end
+try using CUDA; using CUDA: CuIterator catch end
 using ArgParse
 using Optim
-using ModelingToolkit
+
 using TeeStreams
 
 # Custom AdaGrad optimizer that uses Float32 literals
@@ -121,15 +120,40 @@ end
 function load_data(infile::String, use_existing_data::Bool, outdir::String, out_streams)::DataFrame
   # Load the data into a DataFrame
   if use_existing_data
-    infile = replace(infile, ".feather" => "_balanced.feather")
+    infile = replace(infile, ".csv" => "_balanced.csv")
 
     println(out_streams, "Using existing data")
   end
-  data = Feather.read(infile)
+  data = CSV.read(infile, DataFrame)
   if !use_existing_data
     println(out_streams, "Loading data...")
     # Remove rows with missing data
     data = data[completecases(data), :]
+
+    # Filter out inactive and standstill rows (extractor outputs all rows)
+    if "active" in names(data)
+      old_nrows = nrow(data)
+      data = filter(row -> row.active == true, data)
+      println(out_streams, f"Filtered out {old_nrows - nrow(data)} inactive rows")
+    end
+    if "standstill" in names(data)
+      old_nrows = nrow(data)
+      data = filter(row -> row.standstill == false, data)
+      println(out_streams, f"Filtered out {old_nrows - nrow(data)} standstill rows")
+    end
+    # Select only columns needed for training (extractor outputs many extra columns)
+    # Model inputs: v_ego, actual_lateral_accel, lateral_jerk (computed), roll, temporal lat accels, temporal rolls
+    # Target: torque_output
+    temporal_lat_accel_cols = filter(c -> occursin(r"^actual_lateral_accel_t[mp]\d+$", c), names(data))
+    temporal_roll_cols = filter(c -> occursin(r"^roll_t[mp]\d+$", c), names(data))
+    keep_cols = vcat(["v_ego", "actual_lateral_accel", "roll", "torque_output"], temporal_lat_accel_cols, temporal_roll_cols)
+    # Also keep actual_lateral_accel_tp03 for lateral_jerk computation (it's already in temporal cols)
+    select!(data, Symbol.(keep_cols))
+
+    # Compute lateral_jerk from temporal data (not output by extractor)
+    println(out_streams, "Computing lateral_jerk from temporal lateral accel")
+    data[!, :lateral_jerk] = @fastmath @. (data[!, :actual_lateral_accel_tp03] - data[!, :actual_lateral_accel]) / 0.03f0
+
     println(out_streams, f"Loaded {nrow(data)} rows")
     println(out_streams, f"Data {data[sample(1:nrow(data), 20), :]}")
     for col in names(data)
@@ -143,7 +167,7 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
 
     # setup bin ranges
     mm_v_ego = [0.1, 45.0]
-    mm_steer_cmd = [-2.0, 2.0]
+    mm_torque_output = [-2.0, 2.0]
     mm_lateral_accel = [-4.1, 4.1]
     mm_lateral_jerk = [-5.0, 5.0]
     mm_roll = [-0.20, 0.20]
@@ -153,7 +177,7 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
     # this is the max number of points that will go in each bin. it's low because lowspeed data is scarse.
     sample_size = 20
     step_v_ego = (mm_v_ego[2] - mm_v_ego[1]) / nbins
-    step_steer_cmd = (mm_steer_cmd[2] - mm_steer_cmd[1]) / nbins
+    step_torque_output = (mm_torque_output[2] - mm_torque_output[1]) / nbins
     step_lateral_accel = (mm_lateral_accel[2] - mm_lateral_accel[1]) / nbins
     step_lateral_jerk = (mm_lateral_jerk[2] - mm_lateral_jerk[1]) / nbins
     step_roll = (mm_roll[2] - mm_roll[1]) / nbins
@@ -168,11 +192,9 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
         return df
     end
 
-    # if lateral_jerk is always zero, replace with approximation from lateral accel
-    if all(data[!, :lateral_jerk] .≈ 0f0)
-        println(out_streams, "Replacing lateral_jerk with approximation from lateral_accel")
-        data[!, :lateral_jerk] = @fastmath @. (data[!, :lateral_accel_p03] - data[!, :lateral_accel]) / 0.03f0
-    end
+    # Drop actual_lateral_accel_tp03 now that lateral_jerk has been computed from it
+    # (the temporal columns actual_lateral_accel_t* are still kept as model features)
+    # Note: actual_lateral_accel_tp03 is kept since it's a temporal model input
 
     # filter data
     old_nrows = nrow(data)
@@ -180,8 +202,8 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
     data = filter(row -> mm_v_ego[1] < row.v_ego < mm_v_ego[2], data)
     println(out_streams, f"Filtered out {old_nrows - nrow(data)} points with v_ego outside [{mm_v_ego[1]}, {mm_v_ego[2]}]")
     old_nrows = nrow(data)
-    data = filter(row -> abs(row.steer_cmd) <= mm_steer_cmd[2], data)
-    println(out_streams, f"Filtered out {old_nrows - nrow(data)} points with steer_cmd outside [{-mm_steer_cmd[2]}, {mm_steer_cmd[2]}]")
+    data = filter(row -> abs(row.torque_output) <= mm_torque_output[2], data)
+    println(out_streams, f"Filtered out {old_nrows - nrow(data)} points with torque_output outside [{-mm_torque_output[2]}, {mm_torque_output[2]}]")
     old_nrows = nrow(data)
     data = filter_columns(data, "lateral_accel", mm_lateral_accel[2])
     println(out_streams, f"Filtered out {old_nrows - nrow(data)} points with lateral_accel outside [{-mm_lateral_accel[2]}, {mm_lateral_accel[2]}]")
@@ -201,33 +223,25 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
 
     println(out_streams, f"Calculating bins")
     data[!, :v_ego_bins] = cut(data[!, :v_ego], mm_v_ego[1]:step_v_ego:mm_v_ego[2])
-    data[!, :lateral_accel_bins] = cut(data[!, :lateral_accel], mm_lateral_accel[1]:step_lateral_accel:mm_lateral_accel[2])
+    data[!, :actual_lateral_accel_bins] = cut(data[!, :actual_lateral_accel], mm_lateral_accel[1]:step_lateral_accel:mm_lateral_accel[2])
     data[!, :roll_bins] = cut(data[!, :roll], mm_roll[1]:step_roll:mm_roll[2])
     data[!, :lateral_jerk_bins] = cut(data[!, :lateral_jerk], mm_lateral_jerk[1]:step_lateral_jerk:mm_lateral_jerk[2])
 
     # create a combined column for balancing
-    data[!,:combined_column] = string.(data[!,:v_ego_bins], "_", data[!,:lateral_accel_bins])
+    data[!,:combined_column] = string.(data[!,:v_ego_bins], "_", data[!,:actual_lateral_accel_bins])
     
-    # balance the data in parallel
-    bin_dfs = Vector{Vector{DataFrame}}(undef, Threads.nthreads())
-    for i in 1:Threads.nthreads()
-        bin_dfs[i] = Vector{DataFrame}()
-    end
-
+    # balance the data
     unique_bins = unique(data[!, :combined_column])
     prog = ProgressMeter.Progress(length(unique_bins), 1, "Balancing bins:")
     println(out_streams, f"Balancing data into {length(unique_bins)} bins")
-    
-    # Use threads for better performance
-    Threads.@threads for bin_label in unique_bins
+
+    flattened_sampled_bin_data = Vector{DataFrame}(undef, length(unique_bins))
+    Threads.@threads for i in 1:length(unique_bins)
+        bin_label = unique_bins[i]
         bin_data = data[data[!, :combined_column] .== bin_label, :]
-        sampled_bin_data = bin_data[sample(1:nrow(bin_data), min(sample_size, nrow(bin_data))), :]
-        push!(bin_dfs[Threads.threadid()], sampled_bin_data)
-        
+        flattened_sampled_bin_data[i] = bin_data[sample(1:nrow(bin_data), min(sample_size, nrow(bin_data))), :]
         next!(prog)
     end
-    
-    flattened_sampled_bin_data = SplitApplyCombine.flatten(bin_dfs)
     data = vcat(flattened_sampled_bin_data...)
 
     bin_sizes = [size(i,1) for i in flattened_sampled_bin_data]
@@ -257,7 +271,7 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
       end
     end
 
-    Feather.write(joinpath(outdir, replace(infile, ".feather" => "_balanced.feather")), data)
+    CSV.write(joinpath(outdir, replace(Base.basename(infile), ".csv" => "_balanced.csv")), data)
   else
     println(out_streams, "Loading preprocessed data...")
   end
@@ -272,18 +286,18 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
   train, test = stratifiedobs(row->row[:combined_column], data, p = 0.8)
 
   # remove columns used only for binning
-  select!(data, Not([:combined_column, :v_ego_bins, :lateral_accel_bins, :lateral_jerk_bins, :roll_bins]))
+  select!(data, Not([:combined_column, :v_ego_bins, :actual_lateral_accel_bins, :lateral_jerk_bins, :roll_bins]))
 
   # split into independent and dependent variables
-  println(out_streams, select(data, Not([:steer_cmd]))[sample(1:nrow(data), 10), :])
-  X = Float32.(Matrix(select(data, Not([:steer_cmd]))))
-  y = Float32.(data[:, :steer_cmd];)
+  println(out_streams, select(data, Not([:torque_output]))[sample(1:nrow(data), 10), :])
+  X = Float32.(Matrix(select(data, Not([:torque_output]))))
+  y = Float32.(data[:, :torque_output];)
 
   # Calculate the mean and standard deviation of the input features
   input_mean = mean(X, dims=1)
   input_std = std(X, dims=1)
 
-  # Create a copy of the DataFrames with the signs of steer_cmd, lateral_accel, lateral_jerk, and roll reversed to make the data symmetric
+  # Create a copy of the DataFrames with the signs of torque_output, lateral_accel, lateral_jerk, and roll reversed to make the data symmetric
   old_size = size(train, 1)
   println(out_streams, "Training data before copying symmmetric data: $old_size")
   data_sym = deepcopy(train)
@@ -300,11 +314,11 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
   println(out_streams, "Test data after copying symmmetric data: $(size(test,1))")
 
   # Check for Metal first (Apple Silicon), then CUDA, then fall back to CPU
-  if Metal.functional()
+  if @isdefined(Metal) && Metal.functional()
     device = gpu
     Metal.allowscalar(false)
     println(out_streams, "Using device: Metal GPU")
-  elseif CUDA.functional()
+  elseif @isdefined(CUDA) && CUDA.functional()
     device = gpu
     CUDA.allowscalar(false)
     println(out_streams, "Using device: CUDA GPU")
@@ -314,17 +328,17 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
   end
 
   # normalize the data - use @views to avoid unnecessary copies and convert directly to Float32
-  X_train = Matrix{Float32}(select(train, Not([:steer_cmd])))
+  X_train = Matrix{Float32}(select(train, Not([:torque_output])))
   @fastmath @. X_train = (X_train - input_mean) / input_std
   X_train = X_train |> device
   
-  y_train = Array{Float32}(train[:, "steer_cmd"]) |> device
+  y_train = Array{Float32}(train[:, "torque_output"]) |> device
   
-  X_test = Matrix{Float32}(select(test, Not([:steer_cmd])))
+  X_test = Matrix{Float32}(select(test, Not([:torque_output])))
   @fastmath @. X_test = (X_test - input_mean) / input_std
   X_test = X_test |> device
   
-  y_test = Array{Float32}(test[:, "steer_cmd"]) |> device
+  y_test = Array{Float32}(test[:, "torque_output"]) |> device
 
   input_dim = size(X_train, 2)
 
@@ -414,7 +428,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
   grid_odd_neg = prepare_test_grid(lj_func, v_ego_range, -lateral_acceleration_range, -lateral_jerk_range, -roll_range, -lateral_error_range, -roll_rate_range)
   grid_origin = prepare_test_grid(lj_func, v_ego_range, 0, 0, 0, 0, 0)
 
-  varnames = join(names(select(data, Not([:steer_cmd]))), ", ")
+  varnames = join(names(select(data, Not([:torque_output]))), ", ")
 
   function physical_constraint_losses(x, y_pred, λ_monotonic::Float32, λ_odd::Float32, λ_origin::Float32) :: Float32
       if λ_monotonic ≈ 0f0 && λ_odd ≈ 0f0 && λ_origin ≈ 0f0
@@ -816,7 +830,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
       end
   end
 
-  export_model_params_to_json(model, Matrix{Float32}(input_mean), Matrix{Float32}(input_std), "$model_path.json", current_date_and_time, model_test_loss, names(select(data, Not([:steer_cmd]))))
+  export_model_params_to_json(model, Matrix{Float32}(input_mean), Matrix{Float32}(input_std), "$model_path.json", current_date_and_time, model_test_loss, names(select(data, Not([:torque_output]))))
 
 
   # Evaluate the model on the test set 
@@ -1270,11 +1284,11 @@ function multiline_string(strings::Vector{String}, n::Int; prefix="")::String
 end
 
 function create_model(in_file, out_dir_base)
-  carname = replace(Base.basename(in_file), ".feather" => "")
+  carname = replace(Base.basename(in_file), ".csv" => "")
   outdir = create_folder_with_iterator(out_dir_base, carname, make_new=false)
   logfile = open(outdir * "/$(carname)_log.txt", "a")  # Open log file in append mode
   out_streams = TeeStream(stdout, logfile)  # Create a Tee output stream
-  preprocess_infile = replace(in_file, ".feather" => "_balanced.feather")
+  preprocess_infile = replace(in_file, ".csv" => "_balanced.csv")
   use_existing_input = false
   if isfile(preprocess_infile) # && stat(in_file).mtime < stat(preprocess_infile).mtime
       #use_existing_input = true
@@ -1294,21 +1308,25 @@ function create_model(in_file, out_dir_base)
 
   model, input_mean, input_std, X_train, y_train, X_test, y_test, test_loss = train_model(outdir, use_existing_input, data, out_streams)
   
-  test_plot_model(model, outdir, X_train, y_train, X_test, y_test, input_mean, input_std, multiline_string(names(select(data, Not([:steer_cmd]))), 60, prefix="Model input: "), out_streams, test_loss)
+  test_plot_model(model, outdir, X_train, y_train, X_test, y_test, input_mean, input_std, multiline_string(names(select(data, Not([:torque_output]))), 60, prefix="Model input: "), out_streams, test_loss)
   close(logfile)
 end
 
 function main(in_dir)
-  # Get all feather files that aren't balanced files
-  feather_files = filter(file -> occursin(".feather", file) && !occursin("_balanced.feather", file), readdir(in_dir))
-  
+  # Get all CSV files that aren't balanced files
+  csv_files = filter(file -> occursin(".csv", file) && !occursin("_balanced.csv", file), readdir(in_dir))
+
   # Process each file
-  for in_file in feather_files
+  for in_file in csv_files
       println("Processing $in_file")
       create_model(joinpath(in_dir, in_file), in_dir)
   end
 end
 
-# Use the current user's home directory instead of hardcoding
-home_dir = ENV["HOME"]
-main("$home_dir/Downloads/rlogs/output/GENESIS")
+# Accept data directory as command-line argument, or default to ~/Downloads/rlogs/output/GENESIS
+if length(ARGS) > 0
+  main(ARGS[1])
+else
+  home_dir = ENV["HOME"]
+  main("$home_dir/Downloads/rlogs/output/GENESIS")
+end
