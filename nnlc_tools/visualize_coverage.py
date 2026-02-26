@@ -140,6 +140,81 @@ def plot_coverage(df, output_path, gap_threshold=50):
     plt.close()
 
 
+MS_TO_MPH = 2.23694
+
+
+def plot_torque_scatter(df, output_path, max_points=None):
+    """Generate lat_accel vs torque scatter plots split by speed bin (10 mph steps)."""
+    import math
+
+    # Determine lateral accel column
+    lat_accel_col = None
+    for col in ["actual_lateral_accel", "desired_lateral_accel"]:
+        if col in df.columns and df[col].notna().sum() > 0:
+            lat_accel_col = col
+            break
+
+    if lat_accel_col is None:
+        print("WARNING: No lateral acceleration data found for torque scatter.")
+        return
+
+    if "torque_output" not in df.columns:
+        print("WARNING: No torque_output column found. Skipping torque scatter plot.")
+        return
+
+    # Filter to active driving only
+    mask = pd.Series(True, index=df.index)
+    if "active" in df.columns:
+        mask &= df["active"].astype(bool)
+    if "standstill" in df.columns:
+        mask &= ~df["standstill"].astype(bool)
+    active_df = df[mask].copy()
+
+    valid = active_df[[lat_accel_col, "torque_output", "v_ego"]].dropna()
+    valid = valid.copy()
+    valid["speed_mph"] = valid["v_ego"] * MS_TO_MPH
+
+    speed_bins = list(range(0, 90, 10))
+    n_bins = len(speed_bins)
+    ncols = 3
+    nrows = math.ceil(n_bins / ncols)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
+    axes = axes.flatten()
+    fig.suptitle("Lateral Accel vs Torque by Speed Bin", fontsize=14, fontweight="bold")
+
+    for i, speed_lo in enumerate(speed_bins):
+        speed_hi = speed_lo + 10
+        ax = axes[i]
+
+        bin_data = valid[(valid["speed_mph"] >= speed_lo) & (valid["speed_mph"] < speed_hi)]
+        plot_data = bin_data.sample(n=max_points, random_state=42) if max_points and len(bin_data) > max_points else bin_data
+        sc = ax.scatter(plot_data[lat_accel_col], plot_data["torque_output"],
+                        c=plot_data["speed_mph"], cmap="viridis",
+                        vmin=speed_lo, vmax=speed_hi,
+                        s=1.0, alpha=0.3, rasterized=True)
+        fig.colorbar(sc, ax=ax, label="Speed (mph)", pad=0.02)
+
+        ax.set_title(f"{speed_lo}-{speed_hi} mph (n={len(bin_data)})", fontsize=10)
+        ax.set_xlim(-3.5, 3.5)
+        ax.set_ylim(-1.5, 1.5)
+        ax.axhline(0, color="gray", linestyle="--", alpha=0.3)
+        ax.axvline(0, color="gray", linestyle="--", alpha=0.3)
+        ax.set_xlabel("Lat Accel (m/s²)")
+        ax.set_ylabel("Torque")
+        ax.grid(axis="x", color="0.95")
+        ax.grid(axis="y", color="0.95")
+
+    # Hide unused subplots
+    for j in range(n_bins, len(axes)):
+        axes[j].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"Saved torque scatter plot to {output_path}")
+    plt.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Visualize lateral data coverage for NNLC training.",
@@ -149,12 +224,23 @@ def main():
                         help="Output image path (default: coverage.png)")
     parser.add_argument("--gap-threshold", type=int, default=50,
                         help="Highlight bins with fewer than this many samples (default: 50)")
+    parser.add_argument("--torque-scatter", action="store_true",
+                        help="Generate a separate lat_accel vs torque scatter plot")
+    parser.add_argument("--max-points", type=int, default=None,
+                        help="Max data points per torque scatter subplot (random sample)")
     args = parser.parse_args()
 
     df = load_data_for_viz(args.input)
     print(f"Loaded {len(df)} rows")
 
     plot_coverage(df, args.output, args.gap_threshold)
+
+    if args.torque_scatter:
+        # Save alongside the main coverage plot
+        import os
+        out_dir = os.path.dirname(args.output) or "."
+        scatter_path = os.path.join(out_dir, "lat_accel_vs_torque_data.png")
+        plot_torque_scatter(df, scatter_path, max_points=args.max_points)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ nnlc-sync = "nnlc_tools.sync_rlogs:main"
 nnlc-extract = "nnlc_tools.extract_lateral_data:main"
 nnlc-score = "nnlc_tools.score_routes:main"
 nnlc-visualize = "nnlc_tools.visualize_coverage:main"
+nnlc-validate = "nnlc_tools.visualize_model:main"
 
 [project.optional-dependencies]
 dev = ["pytest"]
