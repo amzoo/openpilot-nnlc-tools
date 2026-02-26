@@ -279,7 +279,7 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
   return data
 end
 
-function train_model(working_dir::String, use_existing_model::Bool, data::DataFrame, out_streams)::NamedTuple{(:model, :input_mean, :input_std, :X_train, :y_train, :X_test, :y_test, :test_loss), Tuple{Flux.Chain, Matrix{Float32}, Matrix{Float32}, Matrix{Float32}, Vector{Float32}, Matrix{Float32}, Vector{Float32}, Float32}}
+function train_model(working_dir::String, use_existing_model::Bool, data::DataFrame, out_streams; force_cpu::Bool=false)::NamedTuple{(:model, :input_mean, :input_std, :X_train, :y_train, :X_test, :y_test, :test_loss), Tuple{Flux.Chain, Matrix{Float32}, Matrix{Float32}, Matrix{Float32}, Vector{Float32}, Matrix{Float32}, Vector{Float32}, Float32}}
   model_path = joinpath(working_dir, Base.basename(working_dir))
 
   # split into train and test sets
@@ -314,7 +314,10 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
   println(out_streams, "Test data after copying symmmetric data: $(size(test,1))")
 
   # Check for Metal first (Apple Silicon), then CUDA, then fall back to CPU
-  if @isdefined(Metal) && Metal.functional()
+  if force_cpu
+    device = cpu
+    println(out_streams, "Using device: CPU (forced)")
+  elseif @isdefined(Metal) && Metal.functional()
     device = gpu
     Metal.allowscalar(false)
     println(out_streams, "Using device: Metal GPU")
@@ -605,7 +608,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
         push!(lambdas, (λ, λ_monotonic, λ_odd, λ_origin))
       
         t = now()
-        if (t - last_log_time) > Dates.Millisecond(10000) || epoch >= epoch_max
+        if (t - last_log_time) > Dates.Millisecond(10000) || epoch % logstep == 0 || epoch >= epoch_max
             loss_cur = l
             Δloss = loss_cur - loss_last
             if (Δloss > 0) || (Δloss ≈ 0)
@@ -643,6 +646,8 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
         epoch += 1
         ilog += 1
     end
+    loss_cur = loss(X_train', y_train, model)
+    Δloss = loss_cur - loss_last
     cur_time = Dates.format(now(), "HH:MM:SS")
     println(out_streams, f"round 1 {cur_time} Epoch: {epoch:3d} (of {epoch_max}; Loss: {loss_cur:.6f}, ΔLoss: {Δloss:.7f}, ΔΔLoss: {ΔΔloss:.9f}")
 
@@ -1265,7 +1270,7 @@ function multiline_string(strings::Vector{String}, n::Int; prefix="")::String
   return join(lines, ",\n")
 end
 
-function create_model(in_file, out_dir_base)
+function create_model(in_file, out_dir_base; force_cpu::Bool=false)
   carname = replace(Base.basename(in_file), ".csv" => "")
   outdir = create_folder_with_iterator(out_dir_base, carname, make_new=true)
   logfile = open(outdir * "/$(carname)_log.txt", "a")  # Open log file in append mode
@@ -1288,27 +1293,34 @@ function create_model(in_file, out_dir_base)
       # return
   end
 
-  model, input_mean, input_std, X_train, y_train, X_test, y_test, test_loss = train_model(outdir, use_existing_input, data, out_streams)
+  model, input_mean, input_std, X_train, y_train, X_test, y_test, test_loss = train_model(outdir, use_existing_input, data, out_streams; force_cpu=force_cpu)
   
   test_plot_model(model, outdir, X_train, y_train, X_test, y_test, input_mean, input_std, multiline_string(names(select(data, Not([:torque_output]))), 60, prefix="Model input: "), out_streams, test_loss)
   close(logfile)
 end
 
-function main(in_dir)
+function main(in_dir; force_cpu::Bool=false)
   # Get all CSV files that aren't balanced files
   csv_files = filter(file -> occursin(".csv", file) && !occursin("_balanced.csv", file), readdir(in_dir))
 
   # Process each file
   for in_file in csv_files
       println("Processing $in_file")
-      create_model(joinpath(in_dir, in_file), in_dir)
+      create_model(joinpath(in_dir, in_file), in_dir; force_cpu=force_cpu)
   end
 end
 
 # Accept data directory as command-line argument, or default to ~/Downloads/rlogs/output/GENESIS
-if length(ARGS) > 0
-  main(ARGS[1])
+force_cpu = "--cpu" in ARGS
+positional_args = filter(a -> !startswith(a, "--"), ARGS)
+
+if force_cpu
+  println("CPU mode forced via --cpu flag")
+end
+
+if length(positional_args) > 0
+  main(positional_args[1]; force_cpu=force_cpu)
 else
   home_dir = ENV["HOME"]
-  main("$home_dir/Downloads/rlogs/output/GENESIS")
+  main("$home_dir/Downloads/rlogs/output/GENESIS"; force_cpu=force_cpu)
 end
