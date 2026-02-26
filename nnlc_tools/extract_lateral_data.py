@@ -126,7 +126,7 @@ def extract_segment(rlog_path):
                 if "modelV2" in sm:
                     try:
                         lane_change_state = int(sm["modelV2"].meta.laneChangeState)
-                    except (AttributeError, ValueError):
+                    except (AttributeError, ValueError, TypeError):
                         pass
 
                 row = [
