@@ -32,17 +32,17 @@ cd openpilot-nnlc-tools
 
 # Create virtual environment with uv (recommended)
 uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
-
-# Or install as editable package
 uv pip install -e .
 ```
 
 Or use the setup script (handles everything including uv installation):
 ```bash
 bash setup.sh
-source .venv/bin/activate
+```
+
+All CLI tools work with `uv run` (auto-discovers the `.venv`, no manual activation needed):
+```bash
+uv run nnlc-extract ./data -o output/lateral_data.csv --temporal
 ```
 
 ## Docker
@@ -92,6 +92,23 @@ GPU training in Docker requires [nvidia-container-toolkit](https://docs.nvidia.c
 ## Quick Start
 
 The full pipeline: **sync → extract → score → visualize → train → deploy**
+
+### One-command pipeline
+
+`prepare_training_data.sh` chains steps 1-4 into a single command:
+
+```bash
+# Full pipeline with device sync
+bash prepare_training_data.sh -d 192.168.1.161
+
+# Without sync (rlogs already in ./data)
+bash prepare_training_data.sh
+
+# Custom output dir and minimum score filter
+bash prepare_training_data.sh -o ./my_output --min-score 70
+```
+
+Or run each step individually:
 
 ### 1. Sync rlogs from device
 
