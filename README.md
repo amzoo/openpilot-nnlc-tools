@@ -241,9 +241,7 @@ GPU (CUDA or Metal) is still recommended for large datasets due to speed. See [t
 
 ## Source Attribution
 
-The `vendor/` directory contains original source code from:
-- [mmmorks/sunnypilot](https://github.com/mmmorks/sunnypilot) — Python rlog processing tools
-- [ryanomatic/rlog_aggregation](https://github.com/ryanomatic/rlog_aggregation) — Rlog download tool
-- [mmmorks/OP_ML_FF](https://github.com/mmmorks/OP_ML_FF) (forked from [twilsonco/OP_ML_FF](https://github.com/twilsonco/OP_ML_FF)) — Julia training scripts
-
-See [vendor/README.md](vendor/README.md) for commit hashes and details.
+This project builds on work from:
+- [mmmorks/sunnypilot](https://github.com/mmmorks/sunnypilot) (`staging-merged` @ `8a9f0311`) — Python rlog processing tools
+- [ryanomatic/rlog_aggregation](https://github.com/ryanomatic/rlog_aggregation) (`main` @ `26b1ea05`) — Rlog download tool
+- [mmmorks/OP_ML_FF](https://github.com/mmmorks/OP_ML_FF) (`master` @ `0116b9e3`, forked from [twilsonco/OP_ML_FF](https://github.com/twilsonco/OP_ML_FF)) — Julia training scripts

@@ -2,7 +2,7 @@
 """Minimal standalone LogReader for reading openpilot rlog files.
 
 Replaces the dependency on openpilot's LogReader by bundling the cereal
-capnp schemas in vendor/cereal/ and providing a simple iterator interface.
+capnp schemas in nnlc_tools/cereal/ and providing a simple iterator interface.
 """
 
 import bz2
@@ -11,7 +11,7 @@ import os
 import capnp
 import zstandard as zstd
 
-CEREAL_DIR = os.path.join(os.path.dirname(__file__), "..", "vendor", "cereal")
+CEREAL_DIR = os.path.join(os.path.dirname(__file__), "cereal")
 capnp_log = capnp.load(os.path.join(CEREAL_DIR, "log.capnp"), imports=[CEREAL_DIR])
 
 
