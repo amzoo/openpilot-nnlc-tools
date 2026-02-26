@@ -4,7 +4,7 @@ Tools for training NNLC (Neural Network Lateral Control) models for [openpilot](
 
 NNLC replaces the standard torque lateral controller with a per-vehicle neural network that learns the relationship between desired lateral acceleration and steering torque. This produces smoother, more accurate steering — but training a model requires collecting driving data, processing it, and running the Julia training pipeline.
 
-This repo consolidates the scattered, broken tooling into one place.
+This repo consolidates the scattered, broken tooling into one place. Discussion and support on the [Sunnypilot forum](https://community.sunnypilot.ai/t/nnlc-tools-repo-for-complete-training-to-driving/3283).
 
 ## Prerequisites
 
