@@ -9,12 +9,14 @@ if ! command -v uv &> /dev/null; then
 fi
 
 echo "Creating virtual environment..."
-uv venv
+uv venv --clear
 
 echo "Installing dependencies..."
-source .venv/bin/activate
 uv pip install -e ".[dev]"
 
 echo ""
-echo "Done! Activate the environment with:"
-echo "  source .venv/bin/activate"
+echo "Done! Run tools with:"
+echo "  uv run nnlc-extract ./data -o output/lateral_data.csv --temporal"
+echo ""
+echo "Or run the full pipeline:"
+echo "  bash prepare_training_data.sh"
