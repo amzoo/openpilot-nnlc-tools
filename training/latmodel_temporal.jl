@@ -80,9 +80,9 @@ end
 function Optimisers.apply!(o::CustomAdaGrad, state, x, Δ)
   η, ϵ = o.eta, o.epsilon
   acc = state
-  @inbounds @fastmath @. acc += Δ^2
-  @inbounds @fastmath @. Δ *= η / (√acc + ϵ)
-  return acc
+  @. acc += Δ^2
+  @. Δ *= η / (√acc + ϵ)
+  return (acc, Δ)
 end
 
 Optimisers.init(o::CustomAdaGrad, x::AbstractArray) = fill!(similar(x, Float32), 0f0)
@@ -279,7 +279,7 @@ function load_data(infile::String, use_existing_data::Bool, outdir::String, out_
   return data
 end
 
-function train_model(working_dir::String, use_existing_model::Bool, data::DataFrame, out_streams, metal_optimized::Bool=false)::NamedTuple{(:model, :input_mean, :input_std, :X_train, :y_train, :X_test, :y_test, :test_loss), Tuple{Flux.Chain, Matrix{Float32}, Matrix{Float32}, Matrix{Float32}, Vector{Float32}, Matrix{Float32}, Vector{Float32}, Float32}}
+function train_model(working_dir::String, use_existing_model::Bool, data::DataFrame, out_streams)::NamedTuple{(:model, :input_mean, :input_std, :X_train, :y_train, :X_test, :y_test, :test_loss), Tuple{Flux.Chain, Matrix{Float32}, Matrix{Float32}, Matrix{Float32}, Vector{Float32}, Matrix{Float32}, Vector{Float32}, Float32}}
   model_path = joinpath(working_dir, Base.basename(working_dir))
 
   # split into train and test sets
@@ -354,7 +354,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
 
   # Define the range of values for each independent variable
   speed_len = 8
-  other_len = metal_optimized ? 5 : 9
+  other_len = 5
   v_ego_range = range(1f0, stop=40f0, length=speed_len)
   lateral_acceleration_range = range(-4f0, stop=4f0, length=other_len)
   lateral_acceleration_range_hi = range(-3.95f0, stop=4.05f0, length=other_len)
@@ -430,7 +430,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
 
   varnames = join(names(select(data, Not([:torque_output]))), ", ")
 
-  # Cache for physical constraint losses (used when metal_optimized)
+  # Cache for physical constraint losses (recomputed every N epochs)
   cached_constraint_loss = Ref(0f0)
   constraint_eval_interval = 10
 
@@ -439,8 +439,8 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
           return 0f0
       end
 
-      # When metal_optimized, only recompute every N epochs and cache the result
-      if metal_optimized && epoch % constraint_eval_interval != 0
+      # Only recompute every N epochs and cache the result
+      if epoch % constraint_eval_interval != 0
           return cached_constraint_loss[]
       end
       
@@ -476,9 +476,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
       end
 
       result = @fastmath λ_monotonic * monotonicity_loss + λ_odd * odd_loss + λ_origin * origin_loss
-      if metal_optimized
-          cached_constraint_loss[] = result
-      end
+      cached_constraint_loss[] = result
       return result
   end
 
@@ -523,7 +521,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
   # pick an optimizer
   # opt = Flux.ADAM(0.001)
   # opt = Flux.Nesterov()
-  opt = metal_optimized ? CustomAdaGrad(0.01f0, 1.0f-10) : Flux.AdaGrad()
+  opt = CustomAdaGrad(0.01f0, 1.0f-10)
   state_tree = Optimisers.setup(opt, model)
 
   # train the model (with batches of shuffled data)
@@ -543,7 +541,7 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
   ilog = logstep + 1
   epoch_max = device == gpu ? 10000 : log10(size(X_train, 1)) > 6 ? 150 : 1000
   epoch_min = 25
-  batch_size = 200000
+  batch_size = size(y_train, 1)
 
   println(out_streams, size(X_train))
   println(out_streams, size(y_train))
@@ -560,10 +558,6 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
       end
     end
 
-    if !metal_optimized && size(y_train, 1) > batch_size
-      X_train = cpu(X_train)
-      y_train = cpu(y_train)
-    end
     train_data_loader = DataLoader((X_train', y_train), batchsize=batch_size, shuffle=true)
 
     grid = grid |> device
@@ -599,51 +593,12 @@ function train_model(working_dir::String, use_existing_model::Bool, data::DataFr
         λ_monotonic = λ_monotonicmax * min(1f0, max(0f0, epoch - epoch_max * λ_monotonic_start_epoch_fraction) / (epoch_max * 0.3f0))
         λ_odd = λ_oddmax * min(1f0, max(0f0, epoch - epoch_max * λ_odd_start_epoch_fraction) / (epoch_max * 0.4f0))
         λ_origin = λ_originmax * min(1f0, max(0f0, epoch - epoch_max * λ_origin_start_epoch_fraction) / (epoch_max * 0.2f0))
-        if !metal_optimized
-          λ = λ |> device
-          λ_monotonic = λ_monotonic |> device
-          λ_odd = λ_odd |> device
-          λ_origin = λ_origin |> device
-        end
         l = 0f0
-        if metal_optimized
-          # Optimized path: only differentiate w.r.t. model, no inner loop, no GC
-          for (x, y) in train_data_loader
-            gs = Flux.gradient(model) do model
-              l = loss(x, y, model, λ, λ_monotonic, λ_odd, λ_origin)
-            end
-            state_tree, model = Optimisers.update!(state_tree, model, gs[1])
+        for (x, y) in train_data_loader
+          gs = Flux.gradient(model) do model
+            l = loss(x, y, model, λ, λ_monotonic, λ_odd, λ_origin)
           end
-        elseif size(y_train, 1) > batch_size
-          # Handle batch processing for both Metal and CUDA
-          for (x, y) in train_data_loader
-            for ibatch in 1:20
-              gs = Flux.gradient(model, X_train, y_train, λ, λ_monotonic, λ_odd, λ_origin) do model, X_train, y_train, λ, λ_monotonic, λ_odd, λ_origin
-                l = loss(x, y, model, λ, λ_monotonic, λ_odd, λ_origin)
-              end
-              state_tree, model = Optimisers.update!(state_tree, model, gs[1])
-              if ibatch % 2 == 0
-                epoch += 1
-                ilog += 1
-                push!(losses, l)
-                push!(lambdas, (λ, λ_monotonic, λ_odd, λ_origin))
-                if epoch > epoch_max
-                  break
-                end
-              end
-            end
-            if epoch > epoch_max
-              break
-            end
-          end
-        else
-          for (x, y) in train_data_loader
-            gs = Flux.gradient(model, λ, λ_monotonic, λ_odd, λ_origin) do model, λ, λ_monotonic, λ_odd, λ_origin
-              l = loss(x, y, model, λ, λ_monotonic, λ_odd, λ_origin)
-            end;
-            state_tree, model = Optimisers.update!(state_tree, model, gs[1])
-            GC.gc()
-          end
+          state_tree, model = Optimisers.update!(state_tree, model, gs[1])
         end
 
         push!(losses, l)
@@ -1310,9 +1265,9 @@ function multiline_string(strings::Vector{String}, n::Int; prefix="")::String
   return join(lines, ",\n")
 end
 
-function create_model(in_file, out_dir_base, metal_optimized::Bool=false)
+function create_model(in_file, out_dir_base)
   carname = replace(Base.basename(in_file), ".csv" => "")
-  outdir = create_folder_with_iterator(out_dir_base, carname, make_new=false)
+  outdir = create_folder_with_iterator(out_dir_base, carname, make_new=true)
   logfile = open(outdir * "/$(carname)_log.txt", "a")  # Open log file in append mode
   out_streams = TeeStream(stdout, logfile)  # Create a Tee output stream
   preprocess_infile = replace(in_file, ".csv" => "_balanced.csv")
@@ -1333,34 +1288,27 @@ function create_model(in_file, out_dir_base, metal_optimized::Bool=false)
       # return
   end
 
-  model, input_mean, input_std, X_train, y_train, X_test, y_test, test_loss = train_model(outdir, use_existing_input, data, out_streams, metal_optimized)
+  model, input_mean, input_std, X_train, y_train, X_test, y_test, test_loss = train_model(outdir, use_existing_input, data, out_streams)
   
   test_plot_model(model, outdir, X_train, y_train, X_test, y_test, input_mean, input_std, multiline_string(names(select(data, Not([:torque_output]))), 60, prefix="Model input: "), out_streams, test_loss)
   close(logfile)
 end
 
-function main(in_dir, metal_optimized::Bool=false)
+function main(in_dir)
   # Get all CSV files that aren't balanced files
   csv_files = filter(file -> occursin(".csv", file) && !occursin("_balanced.csv", file), readdir(in_dir))
 
   # Process each file
   for in_file in csv_files
       println("Processing $in_file")
-      create_model(joinpath(in_dir, in_file), in_dir, metal_optimized)
+      create_model(joinpath(in_dir, in_file), in_dir)
   end
 end
 
 # Accept data directory as command-line argument, or default to ~/Downloads/rlogs/output/GENESIS
-metal_optimized = "--metal-optimized" in ARGS
-positional_args = filter(a -> !startswith(a, "--"), ARGS)
-
-if metal_optimized
-  println("Metal-optimized mode enabled")
-end
-
-if length(positional_args) > 0
-  main(positional_args[1], metal_optimized)
+if length(ARGS) > 0
+  main(ARGS[1])
 else
   home_dir = ENV["HOME"]
-  main("$home_dir/Downloads/rlogs/output/GENESIS", metal_optimized)
+  main("$home_dir/Downloads/rlogs/output/GENESIS")
 end
