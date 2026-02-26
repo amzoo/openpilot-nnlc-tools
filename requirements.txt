@@ -1,3 +1,4 @@
+# Pinned deps for quick install. Canonical source: pyproject.toml
 numpy>=1.24,<2.0
 pandas>=2.0,<3.0
 matplotlib>=3.7,<4.0
@@ -6,4 +7,3 @@ zstandard>=0.21
 paramiko>=3.0
 pycapnp>=2.0
 
-# Set PYTHONPATH=/path/to/openpilot before running tools that read rlogs.

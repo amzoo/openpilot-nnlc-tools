@@ -13,8 +13,7 @@ uv venv
 
 echo "Installing dependencies..."
 source .venv/bin/activate
-uv pip install -r requirements.txt
-uv pip install -e .
+uv pip install -e ".[dev]"
 
 echo ""
 echo "Done! Activate the environment with:"
