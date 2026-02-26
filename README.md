@@ -289,3 +289,24 @@ This project builds on work from:
 - [mmmorks/sunnypilot](https://github.com/mmmorks/sunnypilot) (`staging-merged` @ `8a9f0311`) — Python rlog processing tools
 - [ryanomatic/rlog_aggregation](https://github.com/ryanomatic/rlog_aggregation) (`main` @ `26b1ea05`) — Rlog download tool
 - [mmmorks/OP_ML_FF](https://github.com/mmmorks/OP_ML_FF) (`master` @ `0116b9e3`, forked from [twilsonco/OP_ML_FF](https://github.com/twilsonco/OP_ML_FF)) — Julia training scripts
+
+## Roadmap
+
+Derived from community feedback from the Sunnypilot tuning-nnlc Discord channel.
+
+- [x] **Canonical repo** — Tools consolidated from 3 scattered repos into this one
+- [x] **Simplified rlog processing** — Refactored to accept a single input directory, stripped multi-server logic
+- [x] **Rlog syncing** — `nnlc-sync` with rsync (primary) and SFTP fallback, incremental sync
+- [x] **Dependencies** — `pyproject.toml` with pinned versions, bundled cereal schemas (no openpilot checkout needed)
+- [x] **CPU training** — Fixed with `CustomAdaGrad` optimizer and `--cpu` flag
+- [x] **Docker** — Dockerfile + docker-compose with `tools` and `train` services, Julia packages pre-compiled
+- [x] **Coverage visualization** — `nnlc-visualize` generates 3-panel coverage chart (heatmap, histogram, override rate)
+- [x] **Route quality scoring** — `nnlc-score` with 7-criteria scorer (100-point scale)
+- [x] **Driving guidance** — Documented in README (data collection tips, what to avoid)
+- [x] **End-to-end guide** — README covers full pipeline: sync → extract → score → visualize → train → deploy
+- [x] **Troubleshooting** — Common issues documented (OOM, rsync, rlogs, CPU training)
+- [ ] **AMD GPU support** — Port training to support ROCm (community member with 7900 XT available to test)
+- [ ] **Docker AMD GPU** — Add AMD GPU passthrough to Docker setup
+- [ ] **Honda/Acura EPS filtering** — Review and integrate `Micim987/opendbc` signal filtering
+- [ ] **HKG and Mazda compatibility** — Investigate rlog parsing failures for Hyundai/Kia/Genesis and Mazda
+- [ ] **Forum documentation** — Publish guide to Sunnypilot forum per maintainer request
