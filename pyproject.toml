@@ -34,3 +34,6 @@ include = ["nnlc_tools*"]
 
 [tool.setuptools.package-data]
 "nnlc_tools" = ["cereal/*.capnp", "cereal/include/*.capnp"]
+
+[tool.pytest.ini_options]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]

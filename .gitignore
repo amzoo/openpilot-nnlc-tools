@@ -5,6 +5,8 @@ dist/
 build/
 *.png
 *.csv
+!tests/fixtures/*.csv
 *.parquet
 data/
 .venv/
+.pytest_cache/
