@@ -86,22 +86,24 @@ def score_route(df):
             if check_fn(df):
                 score += penalty  # penalty is negative
                 flags.append(desc)
-        except Exception:
+        except (KeyError, TypeError, ZeroDivisionError):
             pass
 
     return max(0, score), flags
 
 
-def load_data(input_path):
-    """Load data from CSV, Parquet, or directory of rlogs."""
+def load_data_with_routes(input_path):
+    """Load data from CSV, Parquet, or directory of rlogs with route tracking."""
     if os.path.isfile(input_path):
-        if input_path.endswith(".parquet"):
-            return pd.read_parquet(input_path), None
-        else:
-            return pd.read_csv(input_path), None
+        from nnlc_tools.data_io import load_data
+        df = load_data(input_path)
+        if df is None:
+            print(f"ERROR: Input not found: {input_path}")
+            sys.exit(1)
+        return df, None
 
     if os.path.isdir(input_path):
-        # Process rlogs directly
+        # Process rlogs directly — need per-file tracking for route grouping
         from nnlc_tools.extract_lateral_data import find_rlogs, extract_segment, COLUMNS
         rlog_files = find_rlogs(input_path)
         if not rlog_files:
@@ -140,7 +142,7 @@ def main():
                         help="Only show routes with score >= this value")
     args = parser.parse_args()
 
-    df, route_col = load_data(args.input)
+    df, route_col = load_data_with_routes(args.input)
 
     if route_col is None:
         # CSV/Parquet without route_id — try to infer from timestamp gaps

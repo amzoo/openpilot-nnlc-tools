@@ -11,7 +11,6 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 
 import matplotlib.pyplot as plt
@@ -20,27 +19,14 @@ import pandas as pd
 from matplotlib.colors import LogNorm
 
 
-def load_data(input_path):
+def load_data_for_viz(input_path):
     """Load data from CSV, Parquet, or directory of rlogs."""
-    if os.path.isfile(input_path):
-        if input_path.endswith(".parquet"):
-            return pd.read_parquet(input_path)
-        return pd.read_csv(input_path)
-
-    if os.path.isdir(input_path):
-        from nnlc_tools.extract_lateral_data import find_rlogs, extract_segment, COLUMNS
-        from tqdm import tqdm
-        rlog_files = find_rlogs(input_path)
-        if not rlog_files:
-            print(f"ERROR: No rlog files found in {input_path}")
-            sys.exit(1)
-        all_rows = []
-        for path in tqdm(rlog_files, desc="Processing rlogs"):
-            all_rows.extend(extract_segment(path))
-        return pd.DataFrame(all_rows, columns=COLUMNS)
-
-    print(f"ERROR: Input not found: {input_path}")
-    sys.exit(1)
+    from nnlc_tools.data_io import load_data
+    df = load_data(input_path)
+    if df is None:
+        print(f"ERROR: No data found at {input_path}")
+        sys.exit(1)
+    return df
 
 
 def plot_coverage(df, output_path, gap_threshold=50):
@@ -165,7 +151,7 @@ def main():
                         help="Highlight bins with fewer than this many samples (default: 50)")
     args = parser.parse_args()
 
-    df = load_data(args.input)
+    df = load_data_for_viz(args.input)
     print(f"Loaded {len(df)} rows")
 
     plot_coverage(df, args.output, args.gap_threshold)

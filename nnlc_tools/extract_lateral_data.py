@@ -12,10 +12,8 @@ Usage:
 
 import argparse
 import glob
-import math
 import os
 import sys
-from collections import deque
 
 import numpy as np
 import pandas as pd
@@ -128,7 +126,7 @@ def extract_segment(rlog_path):
                 if "modelV2" in sm:
                     try:
                         lane_change_state = int(sm["modelV2"].meta.laneChangeState)
-                    except Exception:
+                    except (AttributeError, ValueError):
                         pass
 
                 row = [
