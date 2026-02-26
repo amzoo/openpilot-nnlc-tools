@@ -8,7 +8,6 @@ This repo consolidates the scattered, broken tooling into one place.
 
 ## Prerequisites
 
-- **openpilot source tree** — needed for `LogReader` and capnp definitions
 - **Python 3.11+**
 - **Julia 1.9+** — for model training (with CUDA or Metal GPU recommended)
 - **comma device** — for collecting driving data (comma 3/3X)
@@ -30,15 +29,20 @@ NNLC models have been trained for:
 ```bash
 git clone https://github.com/amzoo/openpilot-nnlc-tools.git
 cd openpilot-nnlc-tools
-pip install -r requirements.txt
 
-# Set PYTHONPATH to your openpilot source tree (needed for LogReader/cereal)
-export PYTHONPATH=/path/to/openpilot
+# Create virtual environment with uv (recommended)
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+
+# Or install as editable package
+uv pip install -e .
 ```
 
-Or install as editable package:
+Or use the setup script (handles everything including uv installation):
 ```bash
-pip install -e .
+bash setup.sh
+source .venv/bin/activate
 ```
 
 ## Quick Start
@@ -186,19 +190,6 @@ python -m nnlc_tools.visualize_coverage [-h] [-o OUTPUT] [--gap-threshold GAP_TH
 ```
 
 ## Troubleshooting
-
-### pycapnp / cereal errors
-
-```
-ModuleNotFoundError: No module named 'cereal'
-```
-
-Set `PYTHONPATH` to your openpilot source tree:
-```bash
-export PYTHONPATH=/path/to/openpilot
-```
-
-If pycapnp itself is missing, install it within the openpilot environment or use openpilot's Poetry/pip setup.
 
 ### Out of memory during extraction
 

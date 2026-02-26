@@ -63,7 +63,7 @@ def extract_segment(rlog_path):
     measure_steering_accuracy.py — accumulate messages by type in a state dict,
     then emit a row when controlsState arrives.
     """
-    from openpilot.tools.lib.logreader import LogReader
+    from nnlc_tools.logreader import LogReader
 
     rows = []
     sm = {}
@@ -82,6 +82,8 @@ def extract_segment(rlog_path):
                 sm["carState"] = msg.carState
             elif msg_type == "controlsState":
                 sm["controlsState"] = msg.controlsState
+            elif msg_type == "selfdriveState":
+                sm["selfdriveState"] = msg.selfdriveState
             elif msg_type == "liveParameters":
                 sm["liveParameters"] = msg.liveParameters
             elif msg_type == "modelV2":
@@ -114,6 +116,12 @@ def extract_segment(rlog_path):
                     torque_output = ps.output
                     saturated = ps.saturated
 
+                # active moved from controlsState to selfdriveState in newer openpilot
+                if "selfdriveState" in sm:
+                    active = sm["selfdriveState"].active
+                else:
+                    active = getattr(ctrl, "active", getattr(ctrl, "activeDEPRECATED", False))
+
                 roll = sm["liveParameters"].roll if "liveParameters" in sm else float("nan")
 
                 lane_change_state = 0
@@ -134,7 +142,7 @@ def extract_segment(rlog_path):
                     cs.standstill,
                     ctrl.desiredCurvature,
                     ctrl.curvature,
-                    ctrl.active,
+                    active,
                     lat_type,
                     actual_lat_accel,
                     desired_lat_accel,

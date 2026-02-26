@@ -6,3 +6,5 @@ build/
 *.png
 *.csv
 *.parquet
+data/
+.venv/
