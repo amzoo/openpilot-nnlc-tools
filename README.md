@@ -259,12 +259,28 @@ Scoring criteria (100 base, deductions):
 ### visualize_coverage
 
 ```
-python -m nnlc_tools.visualize_coverage [-h] [-o OUTPUT] [--gap-threshold GAP_THRESHOLD] input
+python -m nnlc_tools.visualize_coverage [-h] [-o OUTPUT] [--gap-threshold GAP_THRESHOLD] [--torque-scatter] [--max-points MAX_POINTS] input
 
   input              CSV/Parquet file or directory of rlogs
   -o, --output       Output image path (default: coverage.png)
   --gap-threshold    Highlight bins with fewer samples (default: 50)
+  --torque-scatter   Generate a separate lat_accel vs torque scatter plot
+  --max-points       Max data points per torque scatter subplot (random sample)
 ```
+
+### visualize_model
+
+```
+python -m nnlc_tools.visualize_model [-h] [-o OUTPUT_DIR] model data
+
+  model              Trained model JSON file
+  data               Training data CSV/Parquet file
+  -o, --output-dir   Output directory for plots (default: ./output/)
+```
+
+Generates two plot sets with model prediction curves overlaid on data:
+- **lat_accel_vs_torque** — per-speed-bin scatter with viridis speed coloring + model curve
+- **torque_vs_speed** — per-lat_accel-bin scatter with viridis lat_accel coloring + model curve
 
 ## Troubleshooting
 
@@ -313,6 +329,7 @@ This project builds on work from:
 
 Derived from community feedback from the Sunnypilot tuning-nnlc Discord channel.
 
+- [x] **Forum documentation** — Published guide to Sunnypilot forum
 - [x] **Canonical repo** — Tools consolidated from 3 scattered repos into this one
 - [x] **Simplified rlog processing** — Refactored to accept a single input directory, stripped multi-server logic
 - [x] **Rlog syncing** — `nnlc-sync` with rsync (primary) and SFTP fallback, incremental sync
@@ -324,9 +341,9 @@ Derived from community feedback from the Sunnypilot tuning-nnlc Discord channel.
 - [x] **Driving guidance** — Documented in README (data collection tips, what to avoid)
 - [x] **End-to-end guide** — README covers full pipeline: sync → extract → score → visualize → train → deploy
 - [x] **Troubleshooting** — Common issues documented (OOM, rsync, rlogs, CPU training)
+- [x] **Model validation plots** — `nnlc-validate` generates lat_accel_vs_torque and torque_vs_speed plots with model curves
 - [ ] **Docker GPU training** — Test NVIDIA GPU passthrough for Julia training in Docker
 - [ ] **AMD GPU support** — Port training to support ROCm (community member with 7900 XT available to test)
 - [ ] **Docker AMD GPU** — Add AMD GPU passthrough to Docker setup
 - [ ] **Honda/Acura EPS filtering** — Review and integrate `Micim987/opendbc` signal filtering
 - [ ] **HKG and Mazda compatibility** — Investigate rlog parsing failures for Hyundai/Kia/Genesis and Mazda
-- [x] **Forum documentation** — Published guide to Sunnypilot forum
