@@ -45,6 +45,50 @@ bash setup.sh
 source .venv/bin/activate
 ```
 
+## Docker
+
+Docker eliminates dependency hell (pycapnp builds, Julia packages, CUDA) and makes the pipeline reproducible.
+
+### Build
+
+```bash
+docker compose build
+```
+
+### Usage
+
+Two services are provided:
+- **`tools`** — Python CLI tools (extract, score, visualize). No GPU needed.
+- **`train`** — Julia training with NVIDIA GPU passthrough.
+
+Place your rlogs in `./data/` and outputs go to `./output/`.
+
+```bash
+# Extract lateral data
+docker compose run --rm tools nnlc-extract /app/data -o /app/output/lateral_data.csv --temporal
+
+# Score routes
+docker compose run --rm tools nnlc-score /app/output/lateral_data.csv
+
+# Visualize coverage
+docker compose run --rm tools nnlc-visualize /app/output/lateral_data.csv -o /app/output/coverage.png
+
+# Train with GPU (requires nvidia-container-toolkit)
+docker compose run --rm train bash training/run.sh /app/output/lateral_data.csv
+
+# Train on CPU (no GPU required)
+docker compose run --rm tools bash training/run.sh /app/output/lateral_data.csv --cpu
+
+# Run tests
+docker compose run --rm tools pytest tests/ -m "not slow"
+```
+
+### GPU Support
+
+GPU training in Docker requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed on the host. The `train` service automatically passes through all NVIDIA GPUs.
+
+**Note:** Metal (Apple Silicon) GPU passthrough is not supported in Docker. Mac users should use the native install for GPU training, or Docker with `--cpu`.
+
 ## Quick Start
 
 The full pipeline: **sync → extract → score → visualize → train → deploy**
