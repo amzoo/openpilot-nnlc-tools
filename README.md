@@ -150,10 +150,13 @@ python -m nnlc_tools.score_routes lateral_data.csv --min-score 70
 python -m nnlc_tools.visualize_coverage lateral_data.csv -o coverage.png
 ```
 
-This generates a 3-panel plot:
+This generates a 6-panel plot (2 rows):
 - **Speed vs lateral accel heatmap** — shows data density, highlights gaps (<50 samples in red)
 - **Lateral accel distribution** — shows balance of left/right turning data
 - **Override rate by speed** — shows where the driver is fighting the controller
+- **Override rate by lat accel** — where in the lat-accel range interventions cluster
+- **Override density heatmap** — speed × lat-accel concentration of override events
+- **Torque magnitude during overrides** — distribution of driver torque inputs when steering_pressed
 
 ### 5. Assess coverage and iterate
 
@@ -227,12 +230,13 @@ python -m nnlc_tools.sync_rlogs [-h] -d DEVICE -o OUTPUT [-u USER] [-p PATH] [--
 ### extract_lateral_data
 
 ```
-python -m nnlc_tools.extract_lateral_data [-h] [-o OUTPUT] [--format {csv,parquet}] [--temporal] input
+python -m nnlc_tools.extract_lateral_data [-h] [-o OUTPUT] [--format {csv,parquet}] [--temporal] [--filter-overrides] input
 
-  input            Directory containing rlog files
-  -o, --output     Output file path (default: lateral_data.csv)
-  --format         Output format (default: inferred from extension)
-  --temporal       Add temporal lag/lead columns for NNLC training
+  input               Directory containing rlog files
+  -o, --output        Output file path (default: lateral_data.csv)
+  --format            Output format (default: inferred from extension)
+  --temporal          Add temporal lag/lead columns for NNLC training
+  --filter-overrides  Drop rows where driver overrides (steering_pressed=True)
 ```
 
 ### score_routes
@@ -281,6 +285,39 @@ python -m nnlc_tools.visualize_model [-h] [-o OUTPUT_DIR] model data
 Generates two plot sets with model prediction curves overlaid on data:
 - **lat_accel_vs_torque** — per-speed-bin scatter with viridis speed coloring + model curve
 - **torque_vs_speed** — per-lat_accel-bin scatter with viridis lat_accel coloring + model curve
+
+### analyze_interventions
+
+```
+python -m nnlc_tools.analyze_interventions [-h] [-o OUTPUT] [--plot]
+                                            [--min-duration MIN_DURATION]
+                                            [--a-ego-thresh A_EGO_THRESH]
+                                            [--consistency-thresh CONSISTENCY_THRESH]
+                                            [--min-score MIN_SCORE]
+                                            [--gap-frames GAP_FRAMES]
+                                            input
+
+  input                    CSV/Parquet file or directory of rlogs
+  -o, --output             Output plot PNG (default: interventions.png)
+  --plot                   Generate per-rule visualization PNG
+  --min-duration           Threshold for rule_brief in seconds (default: 0.15)
+  --a-ego-thresh           |a_ego| threshold for rule_shock in m/s² (default: 1.5)
+  --consistency-thresh     Torque sign consistency threshold for rule_chaotic (default: 0.65)
+  --min-score              Mechanical score >= this → mechanical (default: 2)
+  --gap-frames             Frames of gap allowed within one event (default: 5)
+```
+
+Classifies each `steering_pressed=True` event as a genuine driver intervention or a mechanical disturbance (pothole, bump, curb impact). Three heuristic rules contribute to a `mechanical_score`:
+
+| Rule | Condition | Default threshold |
+|------|-----------|-------------------|
+| `rule_brief` | Event duration < min_duration | 0.15s |
+| `rule_shock` | \|a_ego\| > thresh AND duration < 0.4s | 1.5 m/s² |
+| `rule_chaotic` | Torque sign consistency < thresh | 0.65 |
+
+Events scoring ≥ `--min-score` rules are classified mechanical (default: 2 of 3 rules must fire).
+
+Use `--plot` to generate a 1×3 per-rule diagnostic chart (`interventions.png`).
 
 ## Troubleshooting
 
@@ -342,6 +379,7 @@ Derived from community feedback from the Sunnypilot tuning-nnlc Discord channel.
 - [x] **End-to-end guide** — README covers full pipeline: sync → extract → score → visualize → train → deploy
 - [x] **Troubleshooting** — Common issues documented (OOM, rsync, rlogs, CPU training)
 - [x] **Model validation plots** — `nnlc-validate` generates lat_accel_vs_torque and torque_vs_speed plots with model curves
+- [x] **Human torque intervention visualization** — second row of `nnlc-visualize`: override rate by lat_accel, override density heatmap, torque magnitude distribution
 - [ ] **Docker GPU training** — Test NVIDIA GPU passthrough for Julia training in Docker
 - [ ] **AMD GPU support** — Port training to support ROCm (community member with 7900 XT available to test)
 - [ ] **Docker AMD GPU** — Add AMD GPU passthrough to Docker setup

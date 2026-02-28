@@ -10,6 +10,8 @@ MODULES = [
     "nnlc_tools.extract_lateral_data",
     "nnlc_tools.score_routes",
     "nnlc_tools.visualize_coverage",
+    "nnlc_tools.visualize_model",
+    "nnlc_tools.analyze_interventions",
 ]
 
 
