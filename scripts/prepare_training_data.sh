@@ -49,7 +49,8 @@ banner() {
 
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 RUN_DIR="$OUTPUT_DIR/$TIMESTAMP"
-mkdir -p "$RUN_DIR"
+TRAIN_DIR="$RUN_DIR/train"
+mkdir -p "$RUN_DIR" "$TRAIN_DIR"
 
 # Step 1: Sync rlogs from device
 if [[ -n "$DEVICE" ]]; then
@@ -88,17 +89,18 @@ if [[ "$PRUNE" != "none" ]]; then
   banner "Step 6/6: Classifying interventions and pruning ($PRUNE)"
   uv run nnlc-interventions "$RUN_DIR/lateral_data_routes_pruned.csv" \
       --prune "$PRUNE" \
-      --prune-output "$RUN_DIR/lateral_data_pruned.csv" \
+      --prune-output "$TRAIN_DIR/lateral_data_pruned.csv" \
       --plot --scatter -o "$RUN_DIR/interventions.png"
 
   uv run nnlc-sc-visualize "$RUN_DIR/lateral_data_routes_pruned.csv" \
       -o "$RUN_DIR/sc_features.png"
-  uv run nnlc-visualize "$RUN_DIR/lateral_data_pruned.csv" \
+  uv run nnlc-visualize "$TRAIN_DIR/lateral_data_pruned.csv" \
       -o "$RUN_DIR/coverage_pruned.png" --torque-scatter
-  TRAIN_INPUT="$RUN_DIR/lateral_data_pruned.csv"
+  TRAIN_INPUT="$TRAIN_DIR"
 else
   banner "Step 6/6: Prune skipped (--prune none)"
-  TRAIN_INPUT="$RUN_DIR/lateral_data_routes_pruned.csv"
+  cp "$RUN_DIR/lateral_data_routes_pruned.csv" "$TRAIN_DIR/lateral_data_routes_pruned.csv"
+  TRAIN_INPUT="$TRAIN_DIR"
 fi
 
 banner "Pipeline complete!"
@@ -106,7 +108,7 @@ echo "Outputs:"
 echo "  Data (raw):          $RUN_DIR/lateral_data.csv"
 echo "  Data (route-pruned): $RUN_DIR/lateral_data_routes_pruned.csv"
 if [[ "$PRUNE" != "none" ]]; then
-  echo "  Data (pruned):       $RUN_DIR/lateral_data_pruned.csv"
+  echo "  Data (pruned):       $TRAIN_DIR/lateral_data_pruned.csv"
 fi
 echo "  Visualizations:      $RUN_DIR/"
 echo "    coverage.png"
@@ -118,5 +120,5 @@ if [[ "$PRUNE" != "none" ]]; then
   echo "    coverage_pruned.png"
 fi
 echo ""
-echo "Next step: review $RUN_DIR/coverage.png for gaps, then train:"
+echo "Next step: review $RUN_DIR/coverage_pruned.png for gaps, then train:"
 echo "  bash training/run.sh $TRAIN_INPUT"

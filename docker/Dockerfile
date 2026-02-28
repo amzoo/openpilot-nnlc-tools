@@ -21,10 +21,9 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
 WORKDIR /app
 
-# Upgrade pip for PEP 621 (pyproject.toml) support, then install deps
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# Upgrade pip for PEP 621 (pyproject.toml) support
+COPY pyproject.toml .
+RUN pip install --no-cache-dir --upgrade pip
 
 # Julia install via juliaup (installs to ~/.juliaup by default)
 ENV JULIA_DEPOT_PATH=/usr/local/julia-depot
