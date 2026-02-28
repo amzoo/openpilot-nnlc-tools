@@ -226,54 +226,54 @@ Or run each step individually:
 ### 1. Sync rlogs from device
 
 ```bash
-python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ~/nnlc-data/
+python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ./data
 
 # Dry run first to see what would be synced
-python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ~/nnlc-data/ --dry-run
+python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ./data --dry-run
 ```
 
 ### 2. Extract lateral data
 
 ```bash
 # Basic extraction
-python3 -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.csv
+python3 -m nnlc_tools.extract_lateral_data ./data -o ./output/lateral_data.csv
 
 # With temporal features (required for training)
-python3 -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.csv --temporal
+python3 -m nnlc_tools.extract_lateral_data ./data -o ./output/lateral_data.csv --temporal
 
 # Parquet format (faster for large datasets)
-python3 -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.parquet --format parquet
+python3 -m nnlc_tools.extract_lateral_data ./data -o ./output/lateral_data.parquet --format parquet
 ```
 
 ### 3. Score route quality
 
 ```bash
-python3 -m nnlc_tools.score_routes ~/nnlc-data/
+python3 -m nnlc_tools.score_routes ./data
 
 # Or score from extracted CSV
-python3 -m nnlc_tools.score_routes lateral_data.csv
+python3 -m nnlc_tools.score_routes ./output/lateral_data.csv
 
 # Only show routes scoring 70+
-python3 -m nnlc_tools.score_routes lateral_data.csv --min-score 70
+python3 -m nnlc_tools.score_routes ./output/lateral_data.csv --min-score 70
 ```
 
 ### 4. Prune routes
 
 ```bash
 # Drop saturated and lane-change frames, no route exclusion (default)
-uv run nnlc-prune-routes output/lateral_data.csv -o output/lateral_data_routes_pruned.csv
+uv run nnlc-prune-routes ./output/lateral_data.csv -o ./output/lateral_data_routes_pruned.csv
 
 # Also exclude routes scoring below 60
-uv run nnlc-prune-routes output/lateral_data.csv --min-score 60 -o output/lateral_data_routes_pruned.csv
+uv run nnlc-prune-routes ./output/lateral_data.csv --min-score 60 -o ./output/lateral_data_routes_pruned.csv
 
 # Keep saturated frames (opt out of frame-level filter)
-uv run nnlc-prune-routes output/lateral_data.csv --keep-saturated -o output/lateral_data_routes_pruned.csv
+uv run nnlc-prune-routes ./output/lateral_data.csv --keep-saturated -o ./output/lateral_data_routes_pruned.csv
 ```
 
 ### 5. Visualize data coverage
 
 ```bash
-python3 -m nnlc_tools.visualize_coverage output/lateral_data_routes_pruned.csv -o output/coverage.png
+python3 -m nnlc_tools.visualize_coverage ./output/lateral_data_routes_pruned.csv -o ./output/coverage.png
 ```
 
 This generates a 6-panel plot (2 rows):
@@ -288,20 +288,20 @@ This generates a 6-panel plot (2 rows):
 
 ```bash
 # Prune all override frames (driver + mechanical) — default
-uv run nnlc-interventions output/lateral_data_routes_pruned.csv \
-    --prune-output output/lateral_data_pruned.csv
+uv run nnlc-interventions ./output/lateral_data_routes_pruned.csv \
+    --prune-output ./output/lateral_data_pruned.csv
 
 # Prune only mechanical disturbances (keep driver interventions)
-uv run nnlc-interventions output/lateral_data_routes_pruned.csv \
-    --prune mechanical --prune-output output/lateral_data_pruned.csv
+uv run nnlc-interventions ./output/lateral_data_routes_pruned.csv \
+    --prune mechanical --prune-output ./output/lateral_data_pruned.csv
 
 # Optional: cascade feature diagnostic plot
-uv run nnlc-interventions output/lateral_data_routes_pruned.csv --plot \
-    --prune-output output/lateral_data_pruned.csv \
-    -o output/interventions.png
+uv run nnlc-interventions ./output/lateral_data_routes_pruned.csv --plot \
+    --prune-output ./output/lateral_data_pruned.csv \
+    -o ./output/interventions.png
 
 # Optional: standalone feature explorer
-uv run nnlc-sc-visualize output/lateral_data_routes_pruned.csv -o output/sc_features.png
+uv run nnlc-sc-visualize ./output/lateral_data_routes_pruned.csv -o ./output/sc_features.png
 ```
 
 The cascade classifier labels each `steering_pressed` event as a **driver** intervention or **mechanical** disturbance (pothole/bump). `--prune-output` writes active frames with the selected event type(s) removed. Default is `both` — removes all override frames for the cleanest training signal. Use `--prune mechanical` to keep driver corrections in the data.
@@ -319,14 +319,14 @@ See [training/README.md](training/README.md) for Julia setup and training instru
 
 ```bash
 # Recommended — handles juliaup PATH automatically
-bash training/run.sh output/lateral_data_pruned.csv
+bash training/run.sh ./output/lateral_data_pruned.csv
 
 # Or run Julia directly
 cd training/
-julia latmodel_temporal.jl output/lateral_data_pruned.csv
+julia latmodel_temporal.jl ../output/lateral_data_pruned.csv
 
 # Force CPU mode (no GPU required, slower for large datasets)
-bash training/run.sh output/lateral_data_pruned.csv --cpu
+bash training/run.sh ./output/lateral_data_pruned.csv --cpu
 ```
 
 ### 9. Deploy model
@@ -496,14 +496,14 @@ Process fewer rlogs at a time, or use `--format parquet` which is more memory-ef
 
 The comma device may not have rsync installed. Use `--no-rsync` to fall back to SFTP:
 ```bash
-python -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ~/nnlc-data/ --no-rsync
+python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ./data --no-rsync
 ```
 
 ### No rlog files found
 
 Check that your rlogs are in the expected directory structure:
 ```
-~/nnlc-data/
+./data/
   2024-01-15--12-30-45/
     0/rlog.zst
     1/rlog.zst
