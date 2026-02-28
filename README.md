@@ -221,35 +221,35 @@ Or run each step individually:
 ### 1. Sync rlogs from device
 
 ```bash
-python -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ~/nnlc-data/
+python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ~/nnlc-data/
 
 # Dry run first to see what would be synced
-python -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ~/nnlc-data/ --dry-run
+python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ~/nnlc-data/ --dry-run
 ```
 
 ### 2. Extract lateral data
 
 ```bash
 # Basic extraction
-python -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.csv
+python3 -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.csv
 
 # With temporal features (required for training)
-python -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.csv --temporal
+python3 -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.csv --temporal
 
 # Parquet format (faster for large datasets)
-python -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.parquet --format parquet
+python3 -m nnlc_tools.extract_lateral_data ~/nnlc-data/ -o lateral_data.parquet --format parquet
 ```
 
 ### 3. Score route quality
 
 ```bash
-python -m nnlc_tools.score_routes ~/nnlc-data/
+python3 -m nnlc_tools.score_routes ~/nnlc-data/
 
 # Or score from extracted CSV
-python -m nnlc_tools.score_routes lateral_data.csv
+python3 -m nnlc_tools.score_routes lateral_data.csv
 
 # Only show routes scoring 70+
-python -m nnlc_tools.score_routes lateral_data.csv --min-score 70
+python3 -m nnlc_tools.score_routes lateral_data.csv --min-score 70
 ```
 
 ### 4. Prune routes
@@ -268,7 +268,7 @@ uv run nnlc-prune-routes output/lateral_data.csv --keep-saturated -o output/late
 ### 5. Visualize data coverage
 
 ```bash
-python -m nnlc_tools.visualize_coverage output/lateral_data_routes_pruned.csv -o output/coverage.png
+python3 -m nnlc_tools.visualize_coverage output/lateral_data_routes_pruned.csv -o output/coverage.png
 ```
 
 This generates a 6-panel plot (2 rows):
