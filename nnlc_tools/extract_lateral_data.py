@@ -187,6 +187,8 @@ def main():
                         help="Output format (default: inferred from extension)")
     parser.add_argument("--temporal", action="store_true",
                         help="Add temporal lag/lead columns for NNLC training")
+    parser.add_argument("--filter-overrides", action="store_true",
+                        help="Drop rows where driver overrides (steering_pressed=True)")
     args = parser.parse_args()
 
     if not os.path.isdir(args.input):
@@ -211,6 +213,12 @@ def main():
 
     df = pd.DataFrame(all_rows, columns=COLUMNS)
     print(f"Extracted {len(df)} rows")
+
+    if args.filter_overrides and "steering_pressed" in df.columns:
+        before = len(df)
+        df = df[~df["steering_pressed"].astype(bool)]
+        dropped = before - len(df)
+        print(f"Filtered {dropped} override rows ({dropped / before:.1%} of data)")
 
     if args.temporal:
         print("Adding temporal columns...")

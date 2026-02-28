@@ -3,7 +3,7 @@
 
 steering_pressed=True fires on both intentional driver corrections and mechanical disturbances
 (potholes, bumps, curb impacts). This tool segments override events and classifies each one
-using three heuristic rules: brief duration, longitudinal shock, and torque oscillation.
+using the three-stage cascade classifier from steering_classifier/.
 
 Usage:
   python -m nnlc_tools.analyze_interventions output/lateral_data.csv
@@ -17,12 +17,15 @@ import numpy as np
 import pandas as pd
 
 
-# Default thresholds
+# Default thresholds (legacy heuristic path — kept for backward compat)
 DEFAULT_MIN_DURATION = 0.15    # seconds — rule_brief threshold
 DEFAULT_A_EGO_THRESH = 1.5     # m/s² — longitudinal shock threshold
 DEFAULT_CONSISTENCY_THRESH = 0.65  # fraction — torque sign consistency threshold
 DEFAULT_MIN_SCORE = 2          # rules that must fire to classify as mechanical
 DEFAULT_GAP_FRAMES = 5         # frames of allowed gap within one event
+DEFAULT_TORQUE_RATE_THRESH = 500.0  # Nm/s — peak |dT/dt| threshold for rule_sharp_onset
+DEFAULT_HIGHWAY_SPEED_THRESH = 20.0  # m/s (~45 mph) — speed above which rule_highway_brief applies
+DEFAULT_HIGHWAY_MIN_DURATION = 0.4   # seconds — duration below which rule_highway_brief fires at speed
 
 
 def load_data(input_path):
@@ -82,10 +85,133 @@ def segment_events(df, gap_frames=DEFAULT_GAP_FRAMES):
     return events
 
 
+def classify_events_cascade(active_df, events, cfg=None):
+    """Classify events using the three-stage cascade classifier.
+
+    Extracts raw signal arrays per event window, calls extract_features() then
+    classify_event() from the steering_classifier package, and returns a unified
+    events DataFrame.
+
+    Returns a DataFrame with one row per event including all cascade features,
+    classification columns, and aggregates needed by print_summary() / mark_rows().
+    """
+    from nnlc_tools.steering_classifier.features import extract_features
+    from nnlc_tools.steering_classifier.cascade import classify_event
+    from nnlc_tools.steering_classifier.config import ClassifierConfig
+
+    if cfg is None:
+        cfg = ClassifierConfig()
+
+    def _col_array(chunk, col, fallback_val=0.0):
+        """Extract column as numpy array, filling missing with fallback_val."""
+        if col in active_df.columns:
+            arr = chunk[col].values.astype(float)
+            arr = np.where(np.isnan(arr), fallback_val, arr)
+            return arr
+        return np.full(len(chunk), fallback_val)
+
+    def _col_array_nan(chunk, col):
+        """Extract column as numpy array, leaving NaN for missing values."""
+        if col in active_df.columns:
+            return chunk[col].values.astype(float)
+        return np.full(len(chunk), np.nan)
+
+    rows = []
+
+    for evt_id, evt in enumerate(events):
+        s, e = evt["start_idx"], evt["end_idx"]
+        chunk = active_df.iloc[s : e + 1]
+        n_frames = len(chunk)
+
+        # Raw signal arrays for extract_features()
+        steering_torque = _col_array(chunk, "steering_torque", 0.0)
+        steering_angle_deg = _col_array(chunk, "steering_angle_deg", 0.0)
+        actual_lateral_accel = _col_array_nan(chunk, "actual_lateral_accel")
+        desired_lateral_accel = _col_array_nan(chunk, "desired_lateral_accel")
+        a_ego = _col_array_nan(chunk, "a_ego")
+        v_ego = _col_array_nan(chunk, "v_ego")
+
+        features = extract_features(
+            steering_torque=steering_torque,
+            steering_angle_deg=steering_angle_deg,
+            actual_lateral_accel=actual_lateral_accel,
+            desired_lateral_accel=desired_lateral_accel,
+            a_ego=a_ego,
+            v_ego=v_ego,
+            cfg=cfg,
+        )
+
+        result = classify_event(features, cfg)
+
+        # Aggregate columns for existing visualizations
+        torque_mean_abs = float(np.abs(steering_torque).mean()) if n_frames > 0 else np.nan
+        valid_a = a_ego[~np.isnan(a_ego)]
+        a_ego_max_abs = float(np.abs(valid_a).max()) if len(valid_a) > 0 else np.nan
+        valid_v = v_ego[~np.isnan(v_ego)]
+        speed_mean = float(valid_v.mean()) if len(valid_v) > 0 else np.nan
+
+        # Lane-change guard — handles both string ("off") and integer (0) encodings
+        lane_change_active = False
+        if "lane_change_state" in active_df.columns:
+            lcs = chunk["lane_change_state"].dropna()
+            if len(lcs) > 0:
+                if lcs.dtype == object:
+                    lane_change_active = bool((lcs != "off").any())
+                else:
+                    lane_change_active = bool((lcs != 0).any())
+
+        # Map cascade label to match mark_rows() / print_summary() expectations
+        classification = "driver" if result.label == "driver" else "mechanical"
+
+        # Lane-change guard: override to driver unconditionally
+        if lane_change_active:
+            classification = "driver"
+
+        row = {
+            # Metadata
+            "event_id": evt_id,
+            "start_idx": s,
+            "end_idx": e,
+            "start_time": s * 0.01,
+            "end_time": e * 0.01,
+            "duration_s": features["duration_s"],
+            "n_frames": n_frames,
+            # Aggregates for existing visualizations
+            "torque_mean_abs": torque_mean_abs,
+            "a_ego_max_abs": a_ego_max_abs,
+            "speed_mean": speed_mean,
+            # All cascade features
+            "peak_torque_rate_nm_s": features["peak_torque_rate_nm_s"],
+            "sign_consistency": features["sign_consistency"],
+            "zero_crossing_rate_hz": features["zero_crossing_rate_hz"],
+            "torque_kurtosis": features["torque_kurtosis"],
+            "has_longitudinal_shock": features["has_longitudinal_shock"],
+            "torque_leads_angle": features["torque_leads_angle"],
+            "torque_lat_accel_corr": features["torque_lat_accel_corr"],
+            "freq_energy_ratio": features["freq_energy_ratio"],
+            "speed_adjusted_is_brief": features["speed_adjusted_is_brief"],
+            "lat_accel_residual": features["lat_accel_residual"],
+            "v_ego_mean": features["v_ego_mean"],
+            "peak_steering_torque_abs": features["peak_steering_torque_abs"],
+            # Classification
+            "stage": result.stage,
+            "mechanical_score": result.mechanical_score,
+            "driver_score": result.driver_score,
+            "confidence": result.confidence,
+            "classification": classification,
+            "lane_change_active": lane_change_active,
+        }
+        rows.append(row)
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
 def compute_event_features(df, events):
     """Compute per-event features from the rows each event spans.
 
     Returns a DataFrame with one row per event.
+
+    NOTE: Kept for backward compatibility. Use classify_events_cascade() in new code.
     """
     rows = []
 
@@ -137,6 +263,30 @@ def compute_event_features(df, events):
             if len(v) > 0:
                 speed_mean = v.mean()
 
+        # Torque rate — peak |dT/dt| in Nm/s (100 Hz data → multiply diff by 100)
+        torque_rate_max_abs = np.nan
+        if "steering_torque" in df.columns:
+            torque_vals = chunk["steering_torque"].dropna()
+            if len(torque_vals) > 1:
+                torque_rate_max_abs = np.abs(np.diff(torque_vals.values)).max() * 100.0
+
+        # Torque-lateral correlation — Pearson r(steering_torque, actual_lateral_accel)
+        torque_lat_corr = np.nan
+        if "steering_torque" in df.columns and "actual_lateral_accel" in df.columns:
+            paired = chunk[["steering_torque", "actual_lateral_accel"]].dropna()
+            if len(paired) >= 3:
+                torque_lat_corr = paired["steering_torque"].corr(paired["actual_lateral_accel"])
+
+        # Lane-change guard — handles both string ("off") and integer (0) encodings
+        lane_change_active = False
+        if "lane_change_state" in df.columns:
+            lcs = chunk["lane_change_state"].dropna()
+            if len(lcs) > 0:
+                if lcs.dtype == object:
+                    lane_change_active = bool((lcs != "off").any())
+                else:
+                    lane_change_active = bool((lcs != 0).any())
+
         # Start/end time (use index as proxy if no time column)
         start_time = s * 0.01
         end_time = e * 0.01
@@ -156,6 +306,9 @@ def compute_event_features(df, events):
             "a_ego_max_abs": a_ego_max_abs,
             "lat_accel_std": lat_accel_std,
             "speed_mean": speed_mean,
+            "torque_rate_max_abs": torque_rate_max_abs,
+            "torque_lat_corr": torque_lat_corr,
+            "lane_change_active": lane_change_active,
         })
 
     return pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -167,10 +320,18 @@ def classify_events(
     a_ego_thresh=DEFAULT_A_EGO_THRESH,
     consistency_thresh=DEFAULT_CONSISTENCY_THRESH,
     min_score=DEFAULT_MIN_SCORE,
+    torque_rate_thresh=DEFAULT_TORQUE_RATE_THRESH,
+    highway_speed_thresh=DEFAULT_HIGHWAY_SPEED_THRESH,
+    highway_min_duration=DEFAULT_HIGHWAY_MIN_DURATION,
 ):
     """Apply heuristic rules and classify each event.
 
-    Adds columns: rule_brief, rule_shock, rule_chaotic, mechanical_score, classification, confidence.
+    Adds columns: rule_brief, rule_shock, rule_chaotic, rule_sharp_onset, rule_highway_brief,
+    mechanical_score, classification, confidence.
+
+    Lane-change guard: if lane_change_active is True the event is classified genuine unconditionally.
+
+    NOTE: Kept for backward compatibility. Use classify_events_cascade() in new code.
     """
     df = events_df.copy()
 
@@ -187,14 +348,32 @@ def classify_events(
         df["torque_sign_consistency"] < consistency_thresh
     ).fillna(False).astype(int)
 
-    df["mechanical_score"] = df["rule_brief"] + df["rule_shock"] + df["rule_chaotic"]
+    # Rule 4: Sharp onset — peak |dT/dt| exceeds threshold (mechanical impulse signature)
+    df["rule_sharp_onset"] = (
+        df["torque_rate_max_abs"] > torque_rate_thresh
+    ).fillna(False).astype(int)
+
+    # Rule 5: Highway brief — short event at highway speed is almost certainly a disturbance
+    df["rule_highway_brief"] = (
+        (df["speed_mean"] > highway_speed_thresh) & (df["duration_s"] < highway_min_duration)
+    ).fillna(False).astype(int)
+
+    df["mechanical_score"] = (
+        df["rule_brief"] + df["rule_shock"] + df["rule_chaotic"]
+        + df["rule_sharp_onset"] + df["rule_highway_brief"]
+    )
     df["classification"] = df["mechanical_score"].apply(
         lambda s: "mechanical" if s >= min_score else "genuine"
     )
+
+    # Lane-change guard: override classification to genuine unconditionally
+    if "lane_change_active" in df.columns:
+        df.loc[df["lane_change_active"].astype(bool), "classification"] = "genuine"
+
     # Confidence: fraction of rules fired (for mechanical), inverted for genuine
     df["confidence"] = df.apply(
-        lambda r: r["mechanical_score"] / 3 if r["classification"] == "mechanical"
-        else 1 - r["mechanical_score"] / 3,
+        lambda r: r["mechanical_score"] / 5 if r["classification"] == "mechanical"
+        else 1 - r["mechanical_score"] / 5,
         axis=1,
     )
 
@@ -265,7 +444,7 @@ def plot_intervention_scatter(df, output_path, max_points=None):
         bin_data = valid[(valid["speed_mph"] >= speed_lo) & (valid["speed_mph"] < speed_hi)]
 
         normal = bin_data[bin_data["_intervention"] == "normal"]
-        genuine = bin_data[bin_data["_intervention"] == "genuine"]
+        genuine = bin_data[bin_data["_intervention"] == "driver"]
         mechanical = bin_data[bin_data["_intervention"] == "mechanical"]
 
         # Downsample normal background if requested
@@ -306,7 +485,7 @@ def plot_intervention_scatter(df, output_path, max_points=None):
     # Legend on first panel
     handles = [
         Patch(facecolor="gray", alpha=0.5, label="Normal driving"),
-        Patch(facecolor="steelblue", alpha=0.8, label="Genuine intervention"),
+        Patch(facecolor="steelblue", alpha=0.8, label="Driver intervention"),
         Patch(facecolor="tomato", alpha=0.9, label="Mechanical disturbance"),
     ]
     axes[0].legend(handles=handles, loc="upper left", fontsize=8)
@@ -320,26 +499,33 @@ def plot_intervention_scatter(df, output_path, max_points=None):
     plt.close()
 
 
-def print_summary(events_df):
+def print_summary(events_df, total_frames=None):
     """Print console summary of classification results."""
     total = len(events_df)
     if total == 0:
         print("No override events found.")
         return
 
-    genuine = events_df[events_df["classification"] == "genuine"]
+    driver = events_df[events_df["classification"] == "driver"]
     mechanical = events_df[events_df["classification"] == "mechanical"]
-    n_genuine = len(genuine)
+    n_driver = len(driver)
     n_mechanical = len(mechanical)
 
     print(f"\nTotal override events: {total:,}")
-    print(f"  Genuine interventions:   {n_genuine:,}  ({n_genuine / total:.1%})")
+    print(f"  Driver interventions:    {n_driver:,}  ({n_driver / total:.1%})")
     print(f"  Mechanical disturbances: {n_mechanical:,} ({n_mechanical / total:.1%})")
 
-    if n_genuine > 0:
-        g_dur = genuine["duration_s"].median()
-        g_torque = genuine["torque_mean_abs"].dropna().median()
-        print(f"\nGenuine:   median duration {g_dur:.2f}s", end="")
+    if total_frames is not None and total_frames > 0:
+        g_frames = int(driver["n_frames"].sum()) if n_driver > 0 else 0
+        m_frames = int(mechanical["n_frames"].sum()) if n_mechanical > 0 else 0
+        print(f"\nAs % of active driving frames ({total_frames:,} total):")
+        print(f"  Driver interventions:    {g_frames:,} frames ({g_frames / total_frames:.2%})")
+        print(f"  Mechanical disturbances: {m_frames:,} frames ({m_frames / total_frames:.2%})")
+
+    if n_driver > 0:
+        g_dur = driver["duration_s"].median()
+        g_torque = driver["torque_mean_abs"].dropna().median()
+        print(f"\nDriver:    median duration {g_dur:.2f}s", end="")
         if not np.isnan(g_torque):
             print(f", median |torque| {g_torque:.1f}", end="")
         print()
@@ -355,78 +541,168 @@ def print_summary(events_df):
     print()
 
 
-def plot_interventions(events_df, output_path, min_duration, a_ego_thresh, consistency_thresh):
-    """Generate 1×3 subplot showing each rule's discriminating power."""
+def plot_interventions(events_df, output_path, cfg=None):
+    """Generate 2×3 subplot showing cascade feature diagnostics.
+
+    Panels:
+      [0,0] — Histogram: peak_torque_rate_nm_s (log x), driver vs mechanical, dashed at 80 Nm/s
+      [0,1] — Histogram: sign_consistency, dashed lines at 0.60 and 0.90
+      [0,2] — Scatter: zero_crossing_rate_hz vs torque_kurtosis, colored by classification
+      [1,0] — Histogram: torque_lat_accel_corr (NaN excluded), dashed at 0.1 and 0.6
+      [1,1] — Histogram: freq_energy_ratio (NaN excluded, log x), dashed at 1.0 and 3.0
+      [1,2] — Grouped bar: cascade stage distribution + genuine vs mechanical totals
+    """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    fig.suptitle("Driver Intervention Classification — Per-Rule Analysis", fontsize=13, fontweight="bold")
+    if cfg is None:
+        from nnlc_tools.steering_classifier.config import ClassifierConfig
+        cfg = ClassifierConfig()
 
-    # Panel 1 — Rule: Brief Duration
-    ax1 = axes[0]
-    fired = events_df[events_df["rule_brief"] == 1]["duration_s"]
-    not_fired = events_df[events_df["rule_brief"] == 0]["duration_s"]
+    driver = events_df[events_df["classification"] == "driver"]
+    mechanical = events_df[events_df["classification"] == "mechanical"]
 
-    bins = np.linspace(0, min(events_df["duration_s"].quantile(0.99), 5.0), 50)
-    ax1.hist(not_fired.clip(upper=bins[-1]), bins=bins, color="steelblue", alpha=0.7, label="not fired")
-    ax1.hist(fired.clip(upper=bins[-1]), bins=bins, color="tomato", alpha=0.7, label="fired")
-    ax1.axvline(min_duration, color="black", linestyle="--", linewidth=1.5, label=f"threshold={min_duration}s")
-    ax1.set_xlabel("Duration (s)")
-    ax1.set_ylabel("Event count")
-    ax1.set_title("Rule: Brief Duration")
-    ax1.legend(fontsize=8)
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig.suptitle("Driver Intervention Classification — Cascade Feature Analysis", fontsize=13, fontweight="bold")
 
-    # Panel 2 — Rule: Longitudinal Shock
-    ax2 = axes[1]
-    has_a_ego = events_df["a_ego_max_abs"].notna()
-    plot_df = events_df[has_a_ego]
+    # ── [0,0] peak_torque_rate_nm_s histogram (log x-axis) ──────────────
+    ax = axes[0, 0]
+    col = "peak_torque_rate_nm_s"
+    d_vals = driver[col].dropna().values
+    m_vals = mechanical[col].dropna().values
+    all_vals = np.concatenate([d_vals, m_vals])
+    if len(all_vals) > 0:
+        pos_vals = all_vals[all_vals > 0]
+        if len(pos_vals) > 0:
+            log_bins = np.logspace(np.log10(max(pos_vals.min(), 0.1)), np.log10(pos_vals.max() * 1.1), 40)
+            if len(d_vals[d_vals > 0]) > 0:
+                ax.hist(d_vals[d_vals > 0], bins=log_bins, color="steelblue", alpha=0.7, label="driver")
+            if len(m_vals[m_vals > 0]) > 0:
+                ax.hist(m_vals[m_vals > 0], bins=log_bins, color="tomato", alpha=0.7, label="mechanical")
+            ax.axvline(cfg.torque_rate_definite_mechanical, color="black", linestyle="--", linewidth=1.5,
+                       label=f"{cfg.torque_rate_definite_mechanical} Nm/s")
+            ax.set_xscale("log")
+    ax.set_xlabel("Peak torque rate (Nm/s)")
+    ax.set_ylabel("Event count")
+    ax.set_title("F1: Peak Torque Rate")
+    ax.legend(fontsize=8)
 
-    if len(plot_df) > 0:
-        colors = ["tomato" if r == 1 else "steelblue" for r in plot_df["rule_shock"]]
-        ax2.scatter(
-            plot_df["duration_s"].clip(upper=2.0),
-            plot_df["a_ego_max_abs"].clip(upper=5.0),
-            c=colors, s=8, alpha=0.5,
-        )
-        ax2.axhline(a_ego_thresh, color="black", linestyle="--", linewidth=1.5, label=f"|a_ego|={a_ego_thresh}")
-        ax2.axvline(0.4, color="gray", linestyle="--", linewidth=1.0, label="dur=0.4s")
-        ax2.set_xlabel("Duration (s)")
-        ax2.set_ylabel("|a_ego| max (m/s²)")
-        ax2.legend(fontsize=8)
-        # Add proxy handles for color legend
-        from matplotlib.patches import Patch
+    # ── [0,1] sign_consistency histogram ────────────────────────────────
+    ax = axes[0, 1]
+    col = "sign_consistency"
+    d_vals = driver[col].dropna().values
+    m_vals = mechanical[col].dropna().values
+    bins = np.linspace(0, 1, 41)
+    if len(d_vals) > 0:
+        ax.hist(d_vals, bins=bins, color="steelblue", alpha=0.7, label="driver")
+    if len(m_vals) > 0:
+        ax.hist(m_vals, bins=bins, color="tomato", alpha=0.7, label="mechanical")
+    ax.axvline(cfg.sign_consistency_mechanical, color="black", linestyle="--", linewidth=1.5,
+               label=f"{cfg.sign_consistency_mechanical}")
+    ax.axvline(cfg.sign_consistency_driver, color="gray", linestyle="--", linewidth=1.0,
+               label=f"{cfg.sign_consistency_driver}")
+    ax.set_xlabel("Sign consistency")
+    ax.set_ylabel("Event count")
+    ax.set_title("F3: Sign Consistency")
+    ax.legend(fontsize=8)
+
+    # ── [0,2] zero_crossing_rate_hz vs torque_kurtosis scatter ──────────
+    ax = axes[0, 2]
+    colors_map = {"driver": "steelblue", "mechanical": "tomato"}
+    for label, subset in [("driver", driver), ("mechanical", mechanical)]:
+        mask = subset["zero_crossing_rate_hz"].notna() & subset["torque_kurtosis"].notna()
+        sub = subset[mask]
+        if len(sub) > 0:
+            ax.scatter(sub["zero_crossing_rate_hz"], sub["torque_kurtosis"],
+                       c=colors_map[label], s=15, alpha=0.6, label=label)
+    ax.set_xlabel("Zero-crossing rate (Hz)")
+    ax.set_ylabel("Torque kurtosis")
+    ax.set_title("F4 vs F5: ZCR vs Kurtosis")
+    ax.legend(fontsize=8)
+
+    # ── [1,0] torque_lat_accel_corr histogram ───────────────────────────
+    ax = axes[1, 0]
+    col = "torque_lat_accel_corr"
+    d_vals = driver[col].dropna().values
+    m_vals = mechanical[col].dropna().values
+    if len(d_vals) > 0 or len(m_vals) > 0:
+        bins = np.linspace(-1, 1, 41)
+        if len(d_vals) > 0:
+            ax.hist(d_vals, bins=bins, color="steelblue", alpha=0.7, label="driver")
+        if len(m_vals) > 0:
+            ax.hist(m_vals, bins=bins, color="tomato", alpha=0.7, label="mechanical")
+        ax.axvline(cfg.corr_mechanical, color="black", linestyle="--", linewidth=1.5,
+                   label=f"{cfg.corr_mechanical}")
+        ax.axvline(cfg.corr_strong_driver, color="gray", linestyle="--", linewidth=1.0,
+                   label=f"{cfg.corr_strong_driver}")
+        ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "No correlation data available",
+                transform=ax.transAxes, ha="center", va="center")
+    ax.set_xlabel("Torque–lat accel correlation")
+    ax.set_ylabel("Event count")
+    ax.set_title("F8: Torque–Lat Accel Correlation")
+
+    # ── [1,1] freq_energy_ratio histogram (log x-axis) ──────────────────
+    ax = axes[1, 1]
+    col = "freq_energy_ratio"
+    d_vals = driver[col].dropna().values
+    m_vals = mechanical[col].dropna().values
+    all_vals = np.concatenate([d_vals, m_vals])
+    if len(all_vals) > 0:
+        pos_vals = all_vals[all_vals > 0]
+        if len(pos_vals) > 0:
+            log_bins = np.logspace(np.log10(max(pos_vals.min(), 0.01)), np.log10(pos_vals.max() * 1.1), 40)
+            if len(d_vals[d_vals > 0]) > 0:
+                ax.hist(d_vals[d_vals > 0], bins=log_bins, color="steelblue", alpha=0.7, label="driver")
+            if len(m_vals[m_vals > 0]) > 0:
+                ax.hist(m_vals[m_vals > 0], bins=log_bins, color="tomato", alpha=0.7, label="mechanical")
+            ax.axvline(cfg.freq_ratio_mechanical, color="black", linestyle="--", linewidth=1.5,
+                       label=f"{cfg.freq_ratio_mechanical}")
+            ax.axvline(cfg.freq_ratio_driver, color="gray", linestyle="--", linewidth=1.0,
+                       label=f"{cfg.freq_ratio_driver}")
+            ax.set_xscale("log")
+            ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "No freq ratio data available",
+                transform=ax.transAxes, ha="center", va="center")
+    ax.set_xlabel("Freq energy ratio (low/high)")
+    ax.set_ylabel("Event count")
+    ax.set_title("F9: Frequency Energy Ratio")
+
+    # ── [1,2] Stage distribution + classification summary bar ───────────
+    ax = axes[1, 2]
+    if "stage" in events_df.columns:
+        stages = [1, 2, 3]
+        stage_counts = [int((events_df["stage"] == s).sum()) for s in stages]
+        n_driver = int((events_df["classification"] == "driver").sum())
+        n_mechanical = int((events_df["classification"] == "mechanical").sum())
+
+        x = np.arange(len(stages) + 1)
+        bar_colors = ["#4e79a7", "#f28e2b", "#e15759", "steelblue"]
+        all_counts = stage_counts + [n_driver]
+        all_labels = ["Stage 1", "Stage 2", "Stage 3", "Driver"]
+        mech_bar = [0, 0, 0, n_mechanical]
+
+        ax.bar(x, all_counts, color=bar_colors, alpha=0.8)
+        ax.bar(x[3:], mech_bar[3:], color="tomato", alpha=0.8)
+        # Overlay mechanical on top of driver for last bar pair
+        ax.bar([3], [n_mechanical], bottom=[n_driver], color="tomato", alpha=0.8, label="mechanical")
+        ax.bar([3], [n_driver], color="steelblue", alpha=0.8, label="driver")
+        ax.bar([0, 1, 2], stage_counts, color=["#4e79a7", "#f28e2b", "#e15759"], alpha=0.8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(["Stage 1", "Stage 2", "Stage 3", "Total"])
+        ax.set_ylabel("Event count")
+        ax.set_title("Cascade Stage Distribution")
         handles = [
-            Patch(facecolor="tomato", alpha=0.7, label="fired"),
-            Patch(facecolor="steelblue", alpha=0.7, label="not fired"),
+            Patch(facecolor="steelblue", alpha=0.8, label="driver"),
+            Patch(facecolor="tomato", alpha=0.8, label="mechanical"),
         ]
-        ax2.legend(handles=handles + ax2.get_lines()[:2], fontsize=8)
+        ax.legend(handles=handles, fontsize=8)
     else:
-        ax2.text(0.5, 0.5, "No a_ego data available",
-                 transform=ax2.transAxes, ha="center", va="center")
-
-    ax2.set_title("Rule: Longitudinal Shock (a_ego)")
-
-    # Panel 3 — Rule: Torque Oscillation
-    ax3 = axes[2]
-    has_consistency = events_df["torque_sign_consistency"].notna()
-    plot_df3 = events_df[has_consistency]
-
-    if len(plot_df3) > 0:
-        fired3 = plot_df3[plot_df3["rule_chaotic"] == 1]["torque_sign_consistency"]
-        not_fired3 = plot_df3[plot_df3["rule_chaotic"] == 0]["torque_sign_consistency"]
-        bins3 = np.linspace(0, 1, 41)
-        ax3.hist(not_fired3, bins=bins3, color="steelblue", alpha=0.7, label="not fired")
-        ax3.hist(fired3, bins=bins3, color="tomato", alpha=0.7, label="fired")
-        ax3.axvline(consistency_thresh, color="black", linestyle="--", linewidth=1.5,
-                    label=f"threshold={consistency_thresh}")
-        ax3.set_xlabel("Torque sign consistency")
-        ax3.set_ylabel("Event count")
-        ax3.legend(fontsize=8)
-    else:
-        ax3.text(0.5, 0.5, "No torque data available",
-                 transform=ax3.transAxes, ha="center", va="center")
-
-    ax3.set_title("Rule: Torque Oscillation")
+        ax.text(0.5, 0.5, "No stage data available",
+                transform=ax.transAxes, ha="center", va="center")
+        ax.set_title("Cascade Stage Distribution")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -442,22 +718,31 @@ def main():
     parser.add_argument("-o", "--output", default="interventions.png",
                         help="Output plot PNG (default: interventions.png)")
     parser.add_argument("--plot", action="store_true",
-                        help="Generate per-rule visualization PNG")
-    parser.add_argument("--min-duration", type=float, default=DEFAULT_MIN_DURATION,
-                        help=f"Threshold for rule_brief in seconds (default: {DEFAULT_MIN_DURATION})")
-    parser.add_argument("--a-ego-thresh", type=float, default=DEFAULT_A_EGO_THRESH,
-                        help=f"|a_ego| threshold for rule_shock in m/s² (default: {DEFAULT_A_EGO_THRESH})")
-    parser.add_argument("--consistency-thresh", type=float, default=DEFAULT_CONSISTENCY_THRESH,
-                        help=f"Torque sign consistency threshold for rule_chaotic (default: {DEFAULT_CONSISTENCY_THRESH})")
-    parser.add_argument("--min-score", type=int, default=DEFAULT_MIN_SCORE,
-                        help=f"Mechanical score >= this → mechanical classification (default: {DEFAULT_MIN_SCORE})")
+                        help="Generate cascade feature visualization PNG")
     parser.add_argument("--gap-frames", type=int, default=DEFAULT_GAP_FRAMES,
                         help=f"Frames of gap allowed within one event (default: {DEFAULT_GAP_FRAMES})")
     parser.add_argument("--scatter", action="store_true",
                         help="Generate lat_accel vs torque scatter plot with intervention points highlighted")
     parser.add_argument("--max-points", type=int, default=None,
                         help="Max normal-driving points per scatter subplot (random sample, default: all)")
+    parser.add_argument("--torque-rate-mechanical", type=float, default=80.0,
+                        help="Torque rate definite mechanical threshold in Nm/s (default: 80.0)")
+    parser.add_argument("--torque-rate-driver", type=float, default=20.0,
+                        help="Torque rate definite driver threshold in Nm/s (default: 20.0)")
+    parser.add_argument("--max-pothole-length", type=float, default=2.5,
+                        help="Max pothole length in meters for speed-adaptive brevity (default: 2.5)")
+    parser.add_argument("--prune-output", default=None, metavar="PATH",
+                        help="Write active frames with the selected event type(s) removed to PATH (.csv or .parquet)")
+    parser.add_argument("--prune", choices=["mechanical", "driver", "both"], default="both",
+                        help="Which event types to remove when --prune-output is set (default: both)")
     args = parser.parse_args()
+
+    from nnlc_tools.steering_classifier.config import ClassifierConfig
+    cfg = ClassifierConfig(
+        torque_rate_definite_mechanical=args.torque_rate_mechanical,
+        torque_rate_definite_driver=args.torque_rate_driver,
+        max_pothole_length_m=args.max_pothole_length,
+    )
 
     df = load_data(args.input)
     print(f"Loaded {len(df):,} rows")
@@ -484,25 +769,12 @@ def main():
         print("No override events found.")
         return
 
-    events_df = compute_event_features(active_df, events)
-    events_df = classify_events(
-        events_df,
-        min_duration=args.min_duration,
-        a_ego_thresh=args.a_ego_thresh,
-        consistency_thresh=args.consistency_thresh,
-        min_score=args.min_score,
-    )
+    events_df = classify_events_cascade(active_df, events, cfg=cfg)
 
-    print_summary(events_df)
+    print_summary(events_df, total_frames=len(active_df))
 
     if args.plot:
-        plot_interventions(
-            events_df,
-            args.output,
-            min_duration=args.min_duration,
-            a_ego_thresh=args.a_ego_thresh,
-            consistency_thresh=args.consistency_thresh,
-        )
+        plot_interventions(events_df, args.output, cfg=cfg)
 
     if args.scatter:
         import os
@@ -510,6 +782,21 @@ def main():
         scatter_path = f"{base}_scatter{ext or '.png'}"
         labelled_df = mark_rows(active_df, events_df)
         plot_intervention_scatter(labelled_df, scatter_path, max_points=args.max_points)
+
+    if args.prune_output:
+        import os
+        labelled_df = mark_rows(active_df, events_df)
+        if args.prune == "both":
+            pruned_df = labelled_df[labelled_df["_intervention"] == "normal"].drop(columns=["_intervention"])
+        else:
+            pruned_df = labelled_df[labelled_df["_intervention"] != args.prune].drop(columns=["_intervention"])
+        n_dropped = len(labelled_df) - len(pruned_df)
+        _, ext = os.path.splitext(args.prune_output)
+        if ext.lower() == ".parquet":
+            pruned_df.to_parquet(args.prune_output, index=False)
+        else:
+            pruned_df.to_csv(args.prune_output, index=False)
+        print(f"Pruned output: {len(pruned_df):,} rows written to {args.prune_output}  ({n_dropped:,} {args.prune} frames removed, {n_dropped / max(len(labelled_df), 1):.2%} of active data)")
 
 
 if __name__ == "__main__":

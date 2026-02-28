@@ -30,7 +30,12 @@ def load_data_for_viz(input_path):
 
 
 def plot_coverage(df, output_path, gap_threshold=50):
-    """Generate coverage visualization with 3 subplots."""
+    """Generate coverage visualization with 6 subplots (2 rows × 3 columns).
+
+    Top row: speed/lat-accel heatmap, lateral accel distribution, override rate by speed.
+    Bottom row: intervention analysis — override rate by lat accel, override density
+    heatmap, torque magnitude distribution during overrides.
+    """
     # Determine lateral accel column
     lat_accel_col = None
     for col in ["actual_lateral_accel", "desired_lateral_accel"]:
@@ -51,11 +56,11 @@ def plot_coverage(df, output_path, gap_threshold=50):
         mask &= ~df["standstill"].astype(bool)
     active_df = df[mask].copy()
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     fig.suptitle("NNLC Training Data Coverage", fontsize=14, fontweight="bold")
 
     # 1. Speed vs Lateral Accel Heatmap
-    ax1 = axes[0]
+    ax1 = axes[0, 0]
     speed_bins = np.linspace(0, 40, 41)
     lat_bins = np.linspace(-3, 3, 61)
 
@@ -94,7 +99,7 @@ def plot_coverage(df, output_path, gap_threshold=50):
     ax1.set_title("Speed vs Lat Accel\n(red outline = <50 samples)")
 
     # 2. Lateral Accel Histogram
-    ax2 = axes[1]
+    ax2 = axes[0, 1]
     lat_valid = active_df[lat_accel_col].dropna()
     ax2.hist(lat_valid.clip(-3, 3), bins=60, color="steelblue", edgecolor="none", alpha=0.8)
     ax2.set_xlabel("Lateral Accel (m/s²)")
@@ -115,7 +120,7 @@ def plot_coverage(df, output_path, gap_threshold=50):
              bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
     # 3. Override Rate by Speed
-    ax3 = axes[2]
+    ax3 = axes[0, 2]
     if "steering_pressed" in df.columns:
         speed_bins_override = np.arange(0, 42, 2)
         df_with_bin = active_df.copy()
@@ -133,6 +138,81 @@ def plot_coverage(df, output_path, gap_threshold=50):
         ax3.text(0.5, 0.5, "No steering_pressed\ndata available",
                  transform=ax3.transAxes, ha="center", va="center")
         ax3.set_title("Steering Override by Speed")
+
+    # ── Row 2: Intervention analysis ─────────────────────────────────────────
+    has_overrides = "steering_pressed" in df.columns
+
+    # 4. Override Density Heatmap (speed × lat_accel)
+    ax4 = axes[1, 0]
+    if has_overrides:
+        override_df = active_df[active_df["steering_pressed"].astype(bool)]
+        if len(override_df) > 0:
+            valid_ov = override_df[["v_ego", lat_accel_col]].dropna()
+            h_ov, xedges_ov, yedges_ov = np.histogram2d(
+                valid_ov["v_ego"].clip(0, 40),
+                valid_ov[lat_accel_col].clip(-3, 3),
+                bins=[speed_bins, lat_bins],
+            )
+            h_ov_display = h_ov.copy()
+            h_ov_display[h_ov_display == 0] = np.nan
+            im_ov = ax4.pcolormesh(
+                xedges_ov, yedges_ov, h_ov_display.T,
+                norm=LogNorm(vmin=1, vmax=max(h_ov.max(), 1)),
+                cmap="viridis",
+            )
+            fig.colorbar(im_ov, ax=ax4, label="Override count (log)")
+            ax4.set_xlabel("Speed (m/s)")
+            ax4.set_ylabel("Lateral Accel (m/s²)")
+        else:
+            ax4.text(0.5, 0.5, "No override events",
+                     transform=ax4.transAxes, ha="center", va="center")
+    else:
+        ax4.text(0.5, 0.5, "No steering_pressed\ndata available",
+                 transform=ax4.transAxes, ha="center", va="center")
+    ax4.set_title("Override Concentration\n(speed × lat accel)")
+
+    # 5. Override Rate by Lat Accel
+    ax5 = axes[1, 2]
+    if has_overrides:
+        lat_bins_override = np.arange(-3, 3.2, 0.2)
+        df_lat = active_df.copy()
+        df_lat["lat_bin"] = pd.cut(df_lat[lat_accel_col], bins=lat_bins_override)
+        override_by_lat = df_lat.groupby("lat_bin", observed=True)["steering_pressed"].mean() * 100
+        centers = [(b.left + b.right) / 2 for b in override_by_lat.index]
+        ax5.bar(centers, override_by_lat.values, width=0.18, color="coral", edgecolor="none", alpha=0.8)
+        ax5.axhline(10, color="red", linestyle="--", alpha=0.5, label="10% threshold")
+        ax5.legend(fontsize=8)
+        ax5.set_xlabel("Lateral Accel (m/s²)")
+        ax5.set_ylabel("Override Rate (%)")
+    else:
+        ax5.text(0.5, 0.5, "No steering_pressed\ndata available",
+                 transform=ax5.transAxes, ha="center", va="center")
+    ax5.set_title("Steering Override by Lat Accel")
+
+    # 6. Torque Magnitude During Overrides
+    ax6 = axes[1, 1]
+    if has_overrides:
+        override_df = active_df[active_df["steering_pressed"].astype(bool)]
+        if "steering_torque" in df.columns and len(override_df) > 0:
+            torque_mag = override_df["steering_torque"].abs().dropna()
+            ax6.hist(torque_mag, bins=40, color="coral", edgecolor="none", alpha=0.8)
+            ax6.set_xlabel("Steering Torque Magnitude")
+            ax6.set_ylabel("Count")
+            n_events = len(torque_mag)
+            median_torque = torque_mag.median()
+            ax6.annotate(
+                f"n = {n_events:,}\nmedian = {median_torque:.2f}",
+                xy=(0.97, 0.97), xycoords="axes fraction",
+                ha="right", va="top", fontsize=9,
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+            )
+        else:
+            ax6.text(0.5, 0.5, "No override events\nor no torque data",
+                     transform=ax6.transAxes, ha="center", va="center")
+    else:
+        ax6.text(0.5, 0.5, "No steering_pressed\ndata available",
+                 transform=ax6.transAxes, ha="center", va="center")
+    ax6.set_title("Torque Magnitude During Overrides")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")

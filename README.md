@@ -91,11 +91,11 @@ GPU training in Docker requires [nvidia-container-toolkit](https://docs.nvidia.c
 
 ## Quick Start
 
-The full pipeline: **sync → extract → score → visualize → train → deploy**
+The full pipeline: **sync → extract → score → visualize → classify & prune → train → deploy**
 
 ### One-command pipeline
 
-`prepare_training_data.sh` chains steps 1-4 into a single command:
+`prepare_training_data.sh` chains steps 1-5 into a single command:
 
 ```bash
 # Full pipeline with device sync
@@ -158,30 +158,52 @@ This generates a 6-panel plot (2 rows):
 - **Override density heatmap** — speed × lat-accel concentration of override events
 - **Torque magnitude during overrides** — distribution of driver torque inputs when steering_pressed
 
-### 5. Assess coverage and iterate
+### 5. Classify & prune interventions
+
+```bash
+# Prune all override frames (driver + mechanical) — default
+uv run nnlc-interventions output/lateral_data.csv \
+    --prune-output output/lateral_data_pruned.csv
+
+# Prune only mechanical disturbances (keep driver interventions)
+uv run nnlc-interventions output/lateral_data.csv \
+    --prune mechanical --prune-output output/lateral_data_pruned.csv
+
+# Optional: cascade feature diagnostic plot
+uv run nnlc-interventions output/lateral_data.csv --plot \
+    --prune-output output/lateral_data_pruned.csv \
+    -o output/interventions.png
+
+# Optional: standalone feature explorer
+uv run nnlc-sc-visualize output/lateral_data.csv -o output/sc_features.png
+```
+
+The cascade classifier labels each `steering_pressed` event as a **driver** intervention or **mechanical** disturbance (pothole/bump). `--prune-output` writes active frames with the selected event type(s) removed. Default is `both` — removes all override frames for the cleanest training signal. Use `--prune mechanical` to keep driver corrections in the data.
+
+### 6. Assess coverage and iterate
 
 Review the coverage chart from step 4. If you see red bins (gaps with <50 samples), collect more driving data targeting those conditions before training. Common gaps:
 - Low-speed tight turns (city driving)
 - High-speed gentle curves (highway)
 - One turning direction over the other
 
-### 6. Train model
+### 7. Train model
 
 See [training/README.md](training/README.md) for Julia setup and training instructions.
 
 ```bash
 # Recommended — handles juliaup PATH automatically
-bash training/run.sh /path/to/latmodels/
+bash training/run.sh output/lateral_data_pruned.csv
 
 # Or run Julia directly
 cd training/
-julia latmodel_temporal.jl /path/to/latmodels/
+julia latmodel_temporal.jl output/lateral_data_pruned.csv
 
 # Force CPU mode (no GPU required, slower for large datasets)
-bash training/run.sh /path/to/latmodels/ --cpu
+bash training/run.sh output/lateral_data_pruned.csv --cpu
 ```
 
-### 7. Deploy model
+### 8. Deploy model
 
 Copy the output JSON to your openpilot install:
 
@@ -289,35 +311,37 @@ Generates two plot sets with model prediction curves overlaid on data:
 ### analyze_interventions
 
 ```
-python -m nnlc_tools.analyze_interventions [-h] [-o OUTPUT] [--plot]
-                                            [--min-duration MIN_DURATION]
-                                            [--a-ego-thresh A_EGO_THRESH]
-                                            [--consistency-thresh CONSISTENCY_THRESH]
-                                            [--min-score MIN_SCORE]
-                                            [--gap-frames GAP_FRAMES]
-                                            input
-
-  input                    CSV/Parquet file or directory of rlogs
-  -o, --output             Output plot PNG (default: interventions.png)
-  --plot                   Generate per-rule visualization PNG
-  --min-duration           Threshold for rule_brief in seconds (default: 0.15)
-  --a-ego-thresh           |a_ego| threshold for rule_shock in m/s² (default: 1.5)
-  --consistency-thresh     Torque sign consistency threshold for rule_chaotic (default: 0.65)
-  --min-score              Mechanical score >= this → mechanical (default: 2)
-  --gap-frames             Frames of gap allowed within one event (default: 5)
+nnlc-interventions [-h] [-o OUTPUT] [--plot] [--scatter]
+                   [--gap-frames GAP_FRAMES] [--max-points MAX_POINTS]
+                   [--torque-rate-mechanical FLOAT]
+                   [--torque-rate-driver FLOAT]
+                   [--max-pothole-length FLOAT]
+                   [--prune-output PATH]
+                   [--prune {mechanical,driver,both}]
+                   input
 ```
 
-Classifies each `steering_pressed=True` event as a genuine driver intervention or a mechanical disturbance (pothole, bump, curb impact). Three heuristic rules contribute to a `mechanical_score`:
+Uses a 3-stage cascade classifier (11 features, F1–F11) to distinguish **driver** corrections from **mechanical** disturbances (potholes, bumps, curb impacts). Stage 1 decides on torque rate + duration alone (~10 ms); Stage 2 adds sign consistency, zero-crossing rate, kurtosis, and longitudinal shock (~50 ms); Stage 3 adds torque–lateral-accel correlation and frequency energy ratio (~150 ms).
 
-| Rule | Condition | Default threshold |
-|------|-----------|-------------------|
-| `rule_brief` | Event duration < min_duration | 0.15s |
-| `rule_shock` | \|a_ego\| > thresh AND duration < 0.4s | 1.5 m/s² |
-| `rule_chaotic` | Torque sign consistency < thresh | 0.65 |
+| Arg | Default | Effect |
+|-----|---------|--------|
+| `--torque-rate-mechanical` | 80.0 Nm/s | Rate above which Stage 1 calls mechanical immediately |
+| `--torque-rate-driver` | 20.0 Nm/s | Rate below which Stage 1 calls driver immediately |
+| `--max-pothole-length` | 2.5 m | Pothole size estimate for speed-adaptive brevity |
+| `--prune-output PATH` | (none) | Write pruned active frames to PATH (.csv or .parquet) |
+| `--prune` | `both` | Remove `mechanical`, `driver`, or `both` event frames |
 
-Events scoring ≥ `--min-score` rules are classified mechanical (default: 2 of 3 rules must fire).
+### nnlc-sc-visualize
 
-Use `--plot` to generate a 1×3 per-rule diagnostic chart (`interventions.png`).
+```
+nnlc-sc-visualize [-h] [-o OUTPUT] [--gap-frames GAP_FRAMES]
+                  [--torque-rate-mechanical FLOAT]
+                  [--torque-rate-driver FLOAT]
+                  [--max-pothole-length FLOAT]
+                  input
+```
+
+Standalone 3×3 feature diagnostic plot — histograms of all 11 classifier features split by driver/mechanical, speed-vs-duration scatter, speed band bar chart, and cascade stage distribution. Useful for threshold exploration without writing pruned output.
 
 ## Troubleshooting
 
@@ -378,10 +402,13 @@ Derived from community feedback from the Sunnypilot tuning-nnlc Discord channel.
 - [x] **Driving guidance** — Documented in README (data collection tips, what to avoid)
 - [x] **End-to-end guide** — README covers full pipeline: sync → extract → score → visualize → train → deploy
 - [x] **Troubleshooting** — Common issues documented (OOM, rsync, rlogs, CPU training)
+- [x] **HKG compatibility** — Fixed rlog parsing failures for Hyundai/Kia/Genesis
 - [x] **Model validation plots** — `nnlc-validate` generates lat_accel_vs_torque and torque_vs_speed plots with model curves
-- [x] **Human torque intervention visualization** — second row of `nnlc-visualize`: override rate by lat_accel, override density heatmap, torque magnitude distribution
+- [x] **Steering input filtering** — 3-stage cascade classifier (`nnlc-interventions`) distinguishes driver corrections from mechanical disturbances; `--prune-output` removes unwanted frames before training
+- [ ] **NNLC-on data quality** — Investigate whether collecting data with an existing NNLC model active degrades the next trained model
+- [ ] **Temporal signal alignment** — Verify that all signals in each training row share the same timestamp and that lag/lead columns are correctly offset
 - [ ] **Docker GPU training** — Test NVIDIA GPU passthrough for Julia training in Docker
 - [ ] **AMD GPU support** — Port training to support ROCm (community member with 7900 XT available to test)
 - [ ] **Docker AMD GPU** — Add AMD GPU passthrough to Docker setup
 - [ ] **Honda/Acura EPS filtering** — Review and integrate `Micim987/opendbc` signal filtering
-- [ ] **HKG and Mazda compatibility** — Investigate rlog parsing failures for Hyundai/Kia/Genesis and Mazda
+- [ ] **Mazda compatibility** — Investigate signal compatibility issues; does the HKG fix above address this too?
