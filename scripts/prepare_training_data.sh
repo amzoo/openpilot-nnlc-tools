@@ -47,7 +47,9 @@ banner() {
   echo ""
 }
 
-mkdir -p "$OUTPUT_DIR"
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_DIR="$OUTPUT_DIR/$TIMESTAMP"
+mkdir -p "$RUN_DIR"
 
 # Step 1: Sync rlogs from device
 if [[ -n "$DEVICE" ]]; then
@@ -60,11 +62,11 @@ fi
 
 # Step 2: Extract lateral data with temporal features
 banner "Step 2/6: Extracting lateral data"
-uv run nnlc-extract "$DATA_DIR" -o "$OUTPUT_DIR/lateral_data.csv" --temporal
+uv run nnlc-extract "$DATA_DIR" -o "$RUN_DIR/lateral_data.csv" --temporal
 
 # Step 3: Score routes
 banner "Step 3/6: Scoring routes"
-SCORE_ARGS=("$OUTPUT_DIR/lateral_data.csv")
+SCORE_ARGS=("$RUN_DIR/lateral_data.csv")
 if [[ -n "$MIN_SCORE" ]]; then
   SCORE_ARGS+=(--min-score "$MIN_SCORE")
 fi
@@ -72,34 +74,49 @@ uv run nnlc-score "${SCORE_ARGS[@]}"
 
 # Step 4: Prune routes
 banner "Step 4/6: Pruning routes"
-uv run nnlc-prune-routes "$OUTPUT_DIR/lateral_data.csv" \
-    -o "$OUTPUT_DIR/lateral_data_routes_pruned.csv" \
+uv run nnlc-prune-routes "$RUN_DIR/lateral_data.csv" \
+    -o "$RUN_DIR/lateral_data_routes_pruned.csv" \
     ${MIN_SCORE:+--min-score "$MIN_SCORE"}
 
 # Step 5: Visualize coverage
 banner "Step 5/6: Visualizing data coverage"
-uv run nnlc-visualize "$OUTPUT_DIR/lateral_data_routes_pruned.csv" -o "$OUTPUT_DIR/coverage.png"
+uv run nnlc-visualize "$RUN_DIR/lateral_data_routes_pruned.csv" \
+    -o "$RUN_DIR/coverage.png" --torque-scatter
 
 # Step 6: Classify interventions and prune
 if [[ "$PRUNE" != "none" ]]; then
   banner "Step 6/6: Classifying interventions and pruning ($PRUNE)"
-  uv run nnlc-interventions "$OUTPUT_DIR/lateral_data_routes_pruned.csv" \
+  uv run nnlc-interventions "$RUN_DIR/lateral_data_routes_pruned.csv" \
       --prune "$PRUNE" \
-      --prune-output "$OUTPUT_DIR/lateral_data_pruned.csv"
-  TRAIN_INPUT="$OUTPUT_DIR/lateral_data_pruned.csv"
+      --prune-output "$RUN_DIR/lateral_data_pruned.csv" \
+      --plot --scatter -o "$RUN_DIR/interventions.png"
+
+  uv run nnlc-sc-visualize "$RUN_DIR/lateral_data_routes_pruned.csv" \
+      -o "$RUN_DIR/sc_features.png"
+  uv run nnlc-visualize "$RUN_DIR/lateral_data_pruned.csv" \
+      -o "$RUN_DIR/coverage_pruned.png" --torque-scatter
+  TRAIN_INPUT="$RUN_DIR/lateral_data_pruned.csv"
 else
   banner "Step 6/6: Prune skipped (--prune none)"
-  TRAIN_INPUT="$OUTPUT_DIR/lateral_data_routes_pruned.csv"
+  TRAIN_INPUT="$RUN_DIR/lateral_data_routes_pruned.csv"
 fi
 
 banner "Pipeline complete!"
 echo "Outputs:"
-echo "  Data (raw):          $OUTPUT_DIR/lateral_data.csv"
-echo "  Data (route-pruned): $OUTPUT_DIR/lateral_data_routes_pruned.csv"
+echo "  Data (raw):          $RUN_DIR/lateral_data.csv"
+echo "  Data (route-pruned): $RUN_DIR/lateral_data_routes_pruned.csv"
 if [[ "$PRUNE" != "none" ]]; then
-  echo "  Data (pruned):       $OUTPUT_DIR/lateral_data_pruned.csv"
+  echo "  Data (pruned):       $RUN_DIR/lateral_data_pruned.csv"
 fi
-echo "  Coverage plot:       $OUTPUT_DIR/coverage.png"
+echo "  Visualizations:      $RUN_DIR/"
+echo "    coverage.png"
+echo "    lat_accel_vs_torque_data.png"
+if [[ "$PRUNE" != "none" ]]; then
+  echo "    interventions.png"
+  echo "    interventions_scatter.png"
+  echo "    sc_features.png"
+  echo "    coverage_pruned.png"
+fi
 echo ""
-echo "Next step: review coverage.png for gaps, then train:"
+echo "Next step: review $RUN_DIR/coverage.png for gaps, then train:"
 echo "  bash training/run.sh $TRAIN_INPUT"
