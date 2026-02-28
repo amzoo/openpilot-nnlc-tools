@@ -1303,10 +1303,13 @@ function main(in_dir; force_cpu::Bool=false)
   # Get all CSV files that aren't balanced files
   csv_files = filter(file -> occursin(".csv", file) && !occursin("_balanced.csv", file), readdir(in_dir))
 
+  results_dir = joinpath(in_dir, "training_results")
+  mkpath(results_dir)
+
   # Process each file
   for in_file in csv_files
       println("Processing $in_file")
-      create_model(joinpath(in_dir, in_file), in_dir; force_cpu=force_cpu)
+      create_model(joinpath(in_dir, in_file), results_dir; force_cpu=force_cpu)
   end
 end
 
