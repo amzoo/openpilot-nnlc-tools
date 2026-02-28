@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 if ! command -v uv &> /dev/null; then
   echo "uv not found, installing..."
@@ -19,4 +19,4 @@ echo "Done! Run tools with:"
 echo "  uv run nnlc-extract ./data -o output/lateral_data.csv --temporal"
 echo ""
 echo "Or run the full pipeline:"
-echo "  bash prepare_training_data.sh"
+echo "  bash scripts/prepare_training_data.sh"

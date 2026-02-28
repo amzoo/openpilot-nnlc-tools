@@ -37,7 +37,7 @@ uv pip install -e .
 
 Or use the setup script (handles everything including uv installation):
 ```bash
-bash setup.sh
+bash scripts/setup.sh
 ```
 
 All CLI tools work with `uv run` (auto-discovers the `.venv`, no manual activation needed):
@@ -52,7 +52,7 @@ Docker eliminates dependency hell (pycapnp builds, Julia packages, CUDA) and mak
 ### Build
 
 ```bash
-docker compose build
+docker compose -f docker/docker-compose.yml build
 ```
 
 ### Usage
@@ -65,22 +65,22 @@ Place your rlogs in `./data/` and outputs go to `./output/`.
 
 ```bash
 # Extract lateral data
-docker compose run --rm tools nnlc-extract /app/data -o /app/output/lateral_data.csv --temporal
+docker compose -f docker/docker-compose.yml run --rm tools nnlc-extract /app/data -o /app/output/lateral_data.csv --temporal
 
 # Score routes
-docker compose run --rm tools nnlc-score /app/output/lateral_data.csv
+docker compose -f docker/docker-compose.yml run --rm tools nnlc-score /app/output/lateral_data.csv
 
 # Visualize coverage
-docker compose run --rm tools nnlc-visualize /app/output/lateral_data.csv -o /app/output/coverage.png
+docker compose -f docker/docker-compose.yml run --rm tools nnlc-visualize /app/output/lateral_data.csv -o /app/output/coverage.png
 
 # Train with GPU (requires nvidia-container-toolkit)
-docker compose run --rm train bash training/run.sh /app/output/lateral_data.csv
+docker compose -f docker/docker-compose.yml run --rm train bash training/run.sh /app/output/lateral_data.csv
 
 # Train on CPU (no GPU required)
-docker compose run --rm tools bash training/run.sh /app/output/lateral_data.csv --cpu
+docker compose -f docker/docker-compose.yml run --rm tools bash training/run.sh /app/output/lateral_data.csv --cpu
 
 # Run tests
-docker compose run --rm tools pytest tests/ -m "not slow"
+docker compose -f docker/docker-compose.yml run --rm tools pytest tests/ -m "not slow"
 ```
 
 ### GPU Support
@@ -95,17 +95,17 @@ The full pipeline: **sync → extract → score → prune routes → visualize �
 
 ### One-command pipeline
 
-`prepare_training_data.sh` chains steps 1-6 into a single command:
+`scripts/prepare_training_data.sh` chains steps 1-6 into a single command:
 
 ```bash
 # Full pipeline with device sync
-bash prepare_training_data.sh -d 192.168.1.161
+bash scripts/prepare_training_data.sh -d 192.168.1.161
 
 # Without sync (rlogs already in ./data)
-bash prepare_training_data.sh
+bash scripts/prepare_training_data.sh
 
 # Custom output dir and minimum score filter
-bash prepare_training_data.sh -o ./my_output --min-score 70
+bash scripts/prepare_training_data.sh -o ./my_output --min-score 70
 ```
 
 Or run each step individually:
