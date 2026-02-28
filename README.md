@@ -91,11 +91,11 @@ GPU training in Docker requires [nvidia-container-toolkit](https://docs.nvidia.c
 
 ## Quick Start
 
-The full pipeline: **sync → extract → score → visualize → classify & prune → train → deploy**
+The full pipeline: **sync → extract → score → prune routes → visualize → classify & prune → train → deploy**
 
 ### One-command pipeline
 
-`prepare_training_data.sh` chains steps 1-5 into a single command:
+`prepare_training_data.sh` chains steps 1-6 into a single command:
 
 ```bash
 # Full pipeline with device sync
@@ -144,10 +144,23 @@ python -m nnlc_tools.score_routes lateral_data.csv
 python -m nnlc_tools.score_routes lateral_data.csv --min-score 70
 ```
 
-### 4. Visualize data coverage
+### 4. Prune routes
 
 ```bash
-python -m nnlc_tools.visualize_coverage lateral_data.csv -o coverage.png
+# Drop saturated and lane-change frames, no route exclusion (default)
+uv run nnlc-prune-routes output/lateral_data.csv -o output/lateral_data_routes_pruned.csv
+
+# Also exclude routes scoring below 60
+uv run nnlc-prune-routes output/lateral_data.csv --min-score 60 -o output/lateral_data_routes_pruned.csv
+
+# Keep saturated frames (opt out of frame-level filter)
+uv run nnlc-prune-routes output/lateral_data.csv --keep-saturated -o output/lateral_data_routes_pruned.csv
+```
+
+### 5. Visualize data coverage
+
+```bash
+python -m nnlc_tools.visualize_coverage output/lateral_data_routes_pruned.csv -o output/coverage.png
 ```
 
 This generates a 6-panel plot (2 rows):
@@ -158,36 +171,36 @@ This generates a 6-panel plot (2 rows):
 - **Override density heatmap** — speed × lat-accel concentration of override events
 - **Torque magnitude during overrides** — distribution of driver torque inputs when steering_pressed
 
-### 5. Classify & prune interventions
+### 6. Classify & prune interventions
 
 ```bash
 # Prune all override frames (driver + mechanical) — default
-uv run nnlc-interventions output/lateral_data.csv \
+uv run nnlc-interventions output/lateral_data_routes_pruned.csv \
     --prune-output output/lateral_data_pruned.csv
 
 # Prune only mechanical disturbances (keep driver interventions)
-uv run nnlc-interventions output/lateral_data.csv \
+uv run nnlc-interventions output/lateral_data_routes_pruned.csv \
     --prune mechanical --prune-output output/lateral_data_pruned.csv
 
 # Optional: cascade feature diagnostic plot
-uv run nnlc-interventions output/lateral_data.csv --plot \
+uv run nnlc-interventions output/lateral_data_routes_pruned.csv --plot \
     --prune-output output/lateral_data_pruned.csv \
     -o output/interventions.png
 
 # Optional: standalone feature explorer
-uv run nnlc-sc-visualize output/lateral_data.csv -o output/sc_features.png
+uv run nnlc-sc-visualize output/lateral_data_routes_pruned.csv -o output/sc_features.png
 ```
 
 The cascade classifier labels each `steering_pressed` event as a **driver** intervention or **mechanical** disturbance (pothole/bump). `--prune-output` writes active frames with the selected event type(s) removed. Default is `both` — removes all override frames for the cleanest training signal. Use `--prune mechanical` to keep driver corrections in the data.
 
-### 6. Assess coverage and iterate
+### 7. Assess coverage and iterate
 
 Review the coverage chart from step 4. If you see red bins (gaps with <50 samples), collect more driving data targeting those conditions before training. Common gaps:
 - Low-speed tight turns (city driving)
 - High-speed gentle curves (highway)
 - One turning direction over the other
 
-### 7. Train model
+### 8. Train model
 
 See [training/README.md](training/README.md) for Julia setup and training instructions.
 
@@ -203,7 +216,7 @@ julia latmodel_temporal.jl output/lateral_data_pruned.csv
 bash training/run.sh output/lateral_data_pruned.csv --cpu
 ```
 
-### 8. Deploy model
+### 9. Deploy model
 
 Copy the output JSON to your openpilot install:
 
@@ -274,13 +287,30 @@ Scoring criteria (100 base, deductions):
 
 | Criterion | Penalty |
 |-----------|---------|
-| Override rate > 10% | -30 |
+| Override rate > 10% | -15 |
 | Saturated > 5% | -20 |
 | Inactive > 20% | -25 |
 | Standstill > 30% | -15 |
 | Lane change > 10% | -10 |
-| Low speed diversity | -10 |
-| Low lat-accel diversity | -10 |
+| < 2 min active driving | -20 |
+
+### prune_routes
+
+```
+nnlc-prune-routes [-h] [-o OUTPUT] [--min-score MIN_SCORE]
+                  [--keep-saturated] [--keep-lane-change]
+                  input
+
+  input                CSV/Parquet file from nnlc-extract
+  -o, --output         Output path (default: pruned_routes.csv)
+  --min-score N        Exclude routes scoring below N (default: 0, no exclusion)
+  --keep-saturated     Do not drop saturated frames
+  --keep-lane-change   Do not drop lane-change frames
+```
+
+Sits between `score_routes` and `visualize_coverage` in the pipeline. Does two things:
+1. **Route-level**: exclude entire routes scoring below `--min-score`
+2. **Frame-level**: drop saturated frames and lane-change frames (enabled by default)
 
 ### visualize_coverage
 
@@ -398,7 +428,8 @@ Derived from community feedback from the Sunnypilot tuning-nnlc Discord channel.
 - [x] **CPU training** — Fixed with `CustomAdaGrad` optimizer and `--cpu` flag
 - [x] **Docker** — Dockerfile + docker-compose with `tools` and `train` services, Julia packages pre-compiled
 - [x] **Coverage visualization** — `nnlc-visualize` generates 3-panel coverage chart (heatmap, histogram, override rate)
-- [x] **Route quality scoring** — `nnlc-score` with 7-criteria scorer (100-point scale)
+- [x] **Route quality scoring** — `nnlc-score` with 6-criteria scorer (100-point scale)
+- [x] **Route pruning** — removes saturated and lane-change frames, optionally excludes low-scoring routes before training
 - [x] **Driving guidance** — Documented in README (data collection tips, what to avoid)
 - [x] **End-to-end guide** — README covers full pipeline: sync → extract → score → visualize → train → deploy
 - [x] **Troubleshooting** — Common issues documented (OOM, rsync, rlogs, CPU training)

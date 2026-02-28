@@ -2,7 +2,7 @@
 """Score route quality for NNLC training data.
 
 Evaluates routes based on override rate, saturation, activity, standstill time,
-lane changes, speed diversity, and lateral acceleration diversity.
+lane changes, and minimum duration.
 
 Usage:
   python -m nnlc_tools.score_routes /path/to/rlogs/
@@ -14,41 +14,15 @@ import os
 import re
 import sys
 
-import numpy as np
 import pandas as pd
 
-def _check_speed_diversity(df):
-    """Check if 90%+ of data falls in a single 5 m/s speed bin."""
-    if "v_ego" not in df.columns or len(df) == 0:
-        return False
-    bins = np.arange(0, df["v_ego"].max() + 5, 5)
-    if len(bins) < 2:
-        return True
-    counts, _ = np.histogram(df["v_ego"], bins=bins)
-    return counts.max() / counts.sum() > 0.90
-
-
-def _check_lat_accel_diversity(df):
-    """Check if 90%+ of lateral accel is within +/-0.5 m/s^2."""
-    col = "actual_lateral_accel"
-    if col not in df.columns:
-        col = "desired_lateral_accel"
-    if col not in df.columns or len(df) == 0:
-        return False
-    valid = df[col].dropna()
-    if len(valid) == 0:
-        return False
-    return (valid.abs() < 0.5).mean() > 0.90
-
-
 CRITERIA = [
-    ("high_override",   lambda df: df["steering_pressed"].mean() > 0.10,  -30, ">10% steering override"),
-    ("high_saturated",  lambda df: df["saturated"].mean() > 0.05,         -20, ">5% saturated"),
-    ("low_active",      lambda df: df["active"].mean() < 0.80,           -25, "<80% active"),
-    ("high_standstill", lambda df: df["standstill"].mean() > 0.30,       -15, ">30% standstill"),
-    ("high_lane_change", lambda df: (df["lane_change_state"] != 0).mean() > 0.10, -10, ">10% lane change"),
-    ("low_speed_diversity", _check_speed_diversity,                       -10, "90%+ in single speed bin"),
-    ("low_lat_accel_diversity", _check_lat_accel_diversity,              -10, "90%+ within +/-0.5 m/s^2"),
+    ("high_override",    lambda df: df["steering_pressed"].mean() > 0.10,                          -15, ">10% steering override"),
+    ("high_saturated",   lambda df: df["saturated"].mean() > 0.05,                                 -20, ">5% saturated"),
+    ("low_active",       lambda df: df["active"].mean() < 0.80,                                    -25, "<80% active"),
+    ("high_standstill",  lambda df: df["standstill"].mean() > 0.30,                                -15, ">30% standstill"),
+    ("high_lane_change", lambda df: (df["lane_change_state"] != 0).mean() > 0.10,                  -10, ">10% lane change"),
+    ("too_short",        lambda df: df["active"].astype(bool).sum() * 0.01 < 120,                  -20, "<2 min active driving"),
 ]
 
 
