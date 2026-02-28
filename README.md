@@ -16,6 +16,9 @@ This repo consolidates the scattered, broken tooling into one place. Discussion 
 
 As of Feb 2026 there are 113 NNLC models. I personally don't know the status of any of them.
 
+<details>
+<summary>View all 113 models</summary>
+
 | Model | Training Date |
 |---|---|
 | ACURA_RDX_3G | 2023-08-05 |
@@ -131,6 +134,8 @@ As of Feb 2026 there are 113 NNLC models. I personally don't know the status of 
 | VOLKSWAGEN_PASSAT_MK8 | 2023-08-13 |
 | VOLKSWAGEN_PASSAT_NMS | 2023-07-17 |
 | VOLKSWAGEN_TIGUAN_MK2 | 2023-08-14 |
+
+</details>
 
 ## Installation
 
