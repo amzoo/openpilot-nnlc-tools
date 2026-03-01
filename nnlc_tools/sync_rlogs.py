@@ -26,7 +26,7 @@ def sync_rsync(user, host, device_path, output_dir, dry_run=False):
     """Sync rlogs using rsync (fast, incremental)."""
     src = f"{user}@{host}:{device_path}"
     cmd = [
-        "rsync", "-avz", "--progress",
+        "rsync", "-avz", "--progress", "--ignore-existing",
         "--include=*/",
         "--include=rlog.zst",
         "--include=rlog.bz2",

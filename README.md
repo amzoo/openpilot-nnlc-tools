@@ -225,6 +225,14 @@ Or run each step individually:
 
 ### 1. Sync rlogs from device
 
+**Mac desktop shortcut:** Copy `scripts/sync_device.command` to your Desktop. Double-click it — a dialog prompts for the device IP (pre-filled with `192.168.1.161`), then syncs to `./data/`.
+
+```bash
+cp scripts/sync_device.command ~/Desktop/
+```
+
+Or run directly:
+
 ```bash
 python3 -m nnlc_tools.sync_rlogs -d 192.168.1.161 -o ./data
 
